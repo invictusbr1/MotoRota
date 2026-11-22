@@ -12,7 +12,7 @@ jobs:
   radares:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Baixar radares do OpenStreetMap
         run: python3 scripts/atualizar_radares.py
       - name: Salvar se mudou
