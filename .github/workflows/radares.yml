@@ -1,0 +1,24 @@
+name: Atualizar radares
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # todo dia 1 do mes
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  radares:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Baixar radares do OpenStreetMap
+        run: python3 scripts/atualizar_radares.py
+      - name: Salvar se mudou
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898900+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/radares.csv
+          git diff --cached --quiet || git commit -m "Atualiza radares do OpenStreetMap"
+          git push
