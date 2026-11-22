@@ -1,5 +1,6 @@
 package com.motorota.ui
 
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -293,8 +294,18 @@ private fun PlanningOverlay(
 
 @Composable
 private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
-    Surface(color = Panel, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp), modifier = Modifier.fillMaxWidth()) {
+    // o painel ocupa no maximo ~60% da tela: o meio rola e o INICIAR fica sempre visivel embaixo
+    val maxH = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.6f).dp
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(max = maxH),
+    ) {
         Column(Modifier.padding(14.dp)) {
+          Column(
+              Modifier.weight(1f, fill = false)
+                  .verticalScroll(androidx.compose.foundation.rememberScrollState())
+          ) {
             // os 3 modos
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Mode.entries.forEach { m -> ModeCard(vm, m, Modifier.weight(1f)) }
@@ -360,6 +371,7 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 OutlinedButton(onClick = onSaveTrip, modifier = Modifier.height(44.dp)) { Text("💾 Salvar passeio") }
             }
             vm.destination?.let { WaypointLine("🔴", it.name, onRemove = null) }
+          }
 
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -369,7 +381,7 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 ) { Text("Cancelar", fontSize = 16.sp) }
                 Button(
                     onClick = { vm.startNavigation() },
-                    enabled = r != null,
+                    enabled = vm.currentRoute != null,
                     modifier = Modifier.weight(1f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Blue, contentColor = Color.White),
                 ) { Text("▶  INICIAR", fontSize = 20.sp, fontWeight = FontWeight.Bold) }

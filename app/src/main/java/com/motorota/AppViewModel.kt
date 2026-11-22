@@ -302,6 +302,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- navegacao ----------
     fun startNavigation() {
         val r = currentRoute ?: return
+        if (r.points.size < 2) {
+            message = "A partida e o destino são o mesmo lugar. Adicione uma parada ou escolha outro destino."
+            return
+        }
         if (origin != null) {
             message = "A navegação usa o GPS como partida. Recalculando a partir da sua posição…"
             origin = null

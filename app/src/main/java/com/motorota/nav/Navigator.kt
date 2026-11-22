@@ -32,6 +32,7 @@ class Navigator(val route: RouteResult) {
 
     fun update(p: GeoPoint): NavState {
         val pts = route.points
+        if (pts.size < 2) return NavState(null, 0.0, 0.0, 0, 0.0, 0, arrived = true)
         // procura o trecho mais proximo numa janela a frente da posicao atual
         val from = max(0, idx - 10)
         val to = min(pts.size - 2, idx + 400)
@@ -75,7 +76,9 @@ class Navigator(val route: RouteResult) {
             remainingS = remainingS,
             offRouteM = bestD,
             progressIndex = idx,
-            arrived = remaining < 40 || p.distanceTo(pts.last()) < 40,
+            // perto do ponto final so conta como chegada depois de rodar boa parte da rota
+            // (em "ida e volta" a partida e o destino sao o mesmo lugar)
+            arrived = remaining < 40 || (p.distanceTo(pts.last()) < 40 && along > total * 0.6),
             alongM = along,
             snapped = GeoPoint(
                 pts[idx].lat + (pts[idx + 1].lat - pts[idx].lat) * bestT,

@@ -103,6 +103,9 @@ class RouteEngine(private val ctx: Context) {
             val c = coords.getJSONArray(i)
             pts.add(GeoPoint(c.getDouble(1), c.getDouble(0)))
         }
+        if (pts.size < 2) throw RouteException(
+            "A partida e o destino são o mesmo lugar. Adicione uma parada (✏️ Editar caminho) ou escolha outro destino."
+        )
         val cum = DoubleArray(pts.size)
         for (i in 1 until pts.size) cum[i] = cum[i - 1] + pts[i - 1].distanceTo(pts[i])
 
