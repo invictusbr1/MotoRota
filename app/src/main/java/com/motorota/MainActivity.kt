@@ -50,6 +50,17 @@ class MainActivity : ComponentActivity() {
         hasPermission.value = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+        // so na versao de teste: am start --es partida "lat,lon" --es destino "lat,lon"
+        if (BuildConfig.DEBUG) {
+            fun pt(k: String) = intent?.getStringExtra(k)?.split(",")?.let {
+                com.motorota.routing.GeoPoint(it[0].toDouble(), it[1].toDouble())
+            }
+            val o = pt("partida"); val d = pt("destino")
+            if (d != null) {
+                if (o != null) vm.setOriginHere(com.motorota.routing.Waypoint(o, "Partida (teste)"))
+                vm.goTo(com.motorota.routing.Waypoint(d, "Destino (teste)"))
+            }
+        }
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(

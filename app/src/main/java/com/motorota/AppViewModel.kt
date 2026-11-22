@@ -102,6 +102,69 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var generation = 0
+
+    // ---------- transito ao vivo (TomTom) ----------
+    /** ocorrencias de agora que estao no caminho (acidente, obra, alagamento...) */
+    var liveIncidents by mutableStateOf<List<com.motorota.data.LiveIncident>>(emptyList()); private set
+    /** frase curta para o painel: "consultando...", "nada no caminho", etc. */
+    var trafficStatus by mutableStateOf<String?>(null); private set
+    /** vias interditadas agora: viram bloqueios temporarios no calculo da rota */
+    private var closures = listOf<RiskArea>()
+    private var closureRounds = 0
+    private var trafficJob: Job? = null
+
+    private fun blocked() = risks + closures
+
+    private fun resetTraffic() {
+        trafficJob?.cancel()
+        closures = emptyList()
+        closureRounds = 0
+        liveIncidents = emptyList()
+        trafficStatus = null
+    }
+
+    /** Confere na TomTom o caminho escolhido; se tiver via interditada, desvia sozinho. */
+    private fun checkTraffic(r: RouteResult, gen: Int) {
+        if (!com.motorota.data.Traffic.enabled) return
+        trafficJob?.cancel()
+        trafficStatus = "📡 Consultando o trânsito de agora…"
+        trafficJob = viewModelScope.launch {
+            val found = try {
+                com.motorota.data.Traffic.along(r)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                android.util.Log.w("MotoRota", "transito TomTom falhou: $e")
+                if (gen == generation) trafficStatus = "📡 Sem internet: trânsito ao vivo não consultado"
+                return@launch
+            }
+            if (gen != generation) return@launch
+            val newClosures = found.filter { inc ->
+                inc.isClosure && closures.none { it.point.distanceTo(inc.point) < 30 }
+            }
+            if (newClosures.isNotEmpty() && closureRounds < 3) {
+                closureRounds++
+                closures = closures + newClosures.map {
+                    RiskArea(System.nanoTime(), it.point, 15, "Interditada (TomTom)", System.currentTimeMillis())
+                }
+                val onde = newClosures.firstOrNull { it.where.isNotBlank() }?.where?.let { " ($it)" } ?: ""
+                message = "⛔ Via interditada agora no caminho$onde. Recalculando para desviar…"
+                if (navigating) say("Via interditada à frente. Recalculando.")
+                if (navigating) myLocation?.let { reroute(it) } else recalc(fit = false)
+                return@launch
+            }
+            liveIncidents = found
+            val desvios = closures.size
+            trafficStatus = when {
+                found.isEmpty() && desvios == 0 -> "✅ Trânsito agora: nada de anormal no caminho"
+                else -> listOfNotNull(
+                    if (desvios > 0) "⛔ $desvios interdição(ões) evitada(s)" else null,
+                    if (found.isNotEmpty()) "${found.size} ocorrência(s) agora no caminho" else null,
+                ).joinToString(" · ")
+            }
+            if (navigating) currentRoute?.let { alongAlerts = alertsOn(it) }
+        }
+    }
     private var routeJob: Job? = null
     private var searchJob: Job? = null
     private var navigator: Navigator? = null
@@ -214,6 +277,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- pontos da rota ----------
     fun goTo(w: Waypoint) {
+        resetTraffic()
         destination = w
         searchResults = emptyList()
         recalc(fit = true)
@@ -250,6 +314,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         routes = emptyMap()
         routeErrors = emptyMap()
         calculating = emptySet()
+        resetTraffic()
         generation++
     }
 
@@ -279,9 +344,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         routeJob = viewModelScope.launch {
             for (m in order) {
                 try {
-                    val r = engine.route(pts, m, risks)
+                    val r = engine.route(pts, m, blocked())
                     if (gen != generation) return@launch
                     routes = routes + (m to r)
+                    if (m == mode) checkTraffic(r, gen)
                     if (fit && m == mode) fitRequest++
                     if (m == mode && pendingStart) {
                         pendingStart = false
@@ -311,7 +377,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             origin = null
         }
         navigator = Navigator(r)
-        alongAlerts = com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards)
+        alongAlerts = alertsOn(r)
         navigating = true
         offRouteCount = 0
         myLocation?.let { navState = navigator?.update(it) }
@@ -335,12 +401,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val m = mode
         viewModelScope.launch {
             try {
-                val r = engine.route(pts, m, risks)
+                val r = engine.route(pts, m, blocked())
                 routes = mapOf(m to r)
                 routeErrors = emptyMap()
                 navigator = Navigator(r)
-                alongAlerts = com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards)
                 offRouteCount = 0
+                checkTraffic(r, generation)
+                alongAlerts = alertsOn(r)
             } catch (e: Throwable) {
                 message = e.message
             } finally {
@@ -403,7 +470,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         hazards = hazards + h
         hazardStore.save(hazards)
         message = "${type.emoji} ${type.label} marcado. Vale por ${if (type.hoursValid >= 48) "${type.hoursValid / 24} dias" else "${type.hoursValid} h"}."
-        currentRoute?.let { if (navigating) alongAlerts = com.motorota.nav.RouteAlerts.compute(it, radarStore, hazards) }
+        currentRoute?.let { if (navigating) alongAlerts = alertsOn(it) }
     }
 
     fun removeHazard(id: Long) {
@@ -558,7 +625,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** radares e alertas em cima da rota escolhida (para o resumo antes de sair) */
-    fun alertsOn(r: RouteResult) = com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards)
+    fun alertsOn(r: RouteResult) = com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards, liveIncidents)
 
     // ---------- mapas ----------
     var downloadProgress by mutableStateOf(MapDownloader.Progress(0, 0, 0, 0)); private set

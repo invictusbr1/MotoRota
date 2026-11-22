@@ -325,7 +325,7 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                     if (r.badPavingM > 500) {
                         Text("🧱 ${formatDistance(r.badPavingM.toDouble())} de paralelepípedo/bloquete", color = TextDim, fontSize = 13.sp)
                     }
-                    val alerts = remember(r, vm.hazards) { vm.alertsOn(r) }
+                    val alerts = remember(r, vm.hazards, vm.liveIncidents) { vm.alertsOn(r) }
                     val nRadar = alerts.count { it.isRadar }
                     val nOther = alerts.size - nRadar
                     if (alerts.isNotEmpty()) {
@@ -339,6 +339,17 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                     }
                     if (vm.risks.isNotEmpty()) {
                         Text("⚠️ Desviando de ${vm.risks.size} área(s) de risco", color = TextDim, fontSize = 13.sp)
+                    }
+                    // transito de agora (TomTom)
+                    vm.trafficStatus?.let { Text(it, color = TextDim, fontSize = 13.sp) }
+                    vm.liveIncidents.take(4).forEach { inc ->
+                        Text(
+                            "${inc.emoji} ${inc.title}" + if (inc.where.isNotBlank()) " · ${inc.where}" else "",
+                            color = Color(0xFFFFB74D), fontSize = 13.sp, maxLines = 1,
+                        )
+                    }
+                    if (vm.liveIncidents.size > 4) {
+                        Text("… e mais ${vm.liveIncidents.size - 4}", color = TextDim, fontSize = 13.sp)
                     }
                 }
                 err != null -> Text(err, color = Danger, fontSize = 15.sp)

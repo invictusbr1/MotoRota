@@ -22,7 +22,12 @@ data class AlongAlert(
 
 object RouteAlerts {
 
-    fun compute(route: RouteResult, radars: RadarStore, hazards: List<Hazard>): List<AlongAlert> {
+    fun compute(
+        route: RouteResult,
+        radars: RadarStore,
+        hazards: List<Hazard>,
+        live: List<com.motorota.data.LiveIncident> = emptyList(),
+    ): List<AlongAlert> {
         val pts = route.points
         if (pts.size < 2) return emptyList()
         val out = ArrayList<AlongAlert>()
@@ -63,6 +68,19 @@ object RouteAlerts {
                     title = h.type.label,
                     speech = h.type.speech,
                     isRadar = h.type == com.motorota.data.HazardType.RADAR_MOVEL,
+                )
+            )
+        }
+        // transito ao vivo (TomTom)
+        for (l in live) {
+            val hit = project(route, l.point, 40.0) ?: continue
+            out.add(
+                AlongAlert(
+                    key = "tt-${l.id}",
+                    posM = hit.posM,
+                    emoji = l.emoji,
+                    title = l.title + if (l.where.isNotBlank()) " · ${l.where}" else "",
+                    speech = l.speech,
                 )
             )
         }

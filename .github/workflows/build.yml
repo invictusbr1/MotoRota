@@ -29,6 +29,8 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > keystore/motorota.jks
 
       - name: Compilar
+        env:
+          TOMTOM_KEY: ${{ secrets.TOMTOM_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon

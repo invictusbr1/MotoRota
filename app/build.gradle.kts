@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,6 +17,13 @@ android {
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
         // "dono/MotoRota" quando compilado pelo GitHub Actions: usado para avisar de versao nova
+        // chave da TomTom (transito ao vivo): no GitHub vem do segredo TOMTOM_KEY,
+        // no computador vem do local.properties (tomtom.key=...). Nunca fica no codigo.
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+        }
+        val tomtomKey = System.getenv("TOMTOM_KEY") ?: localProps.getProperty("tomtom.key") ?: ""
+        buildConfigField("String", "TOMTOM_KEY", "\"" + tomtomKey + "\"")
         buildConfigField("String", "GITHUB_REPO", "\"" + (System.getenv("GITHUB_REPOSITORY") ?: "") + "\"")
         ndk { abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a,armeabi-v7a").split(",") }
     }
