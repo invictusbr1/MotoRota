@@ -374,7 +374,10 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 if (r.badPavingM > 500) {
                     Text("🧱 ${formatDistance(r.badPavingM.toDouble())} de paralelepípedo/bloquete", color = TextDim, fontSize = 13.sp)
                 }
-                val alerts = remember(r, vm.hazards, vm.liveIncidents) { vm.alertsOn(r) }
+                // contas pesadas (radares, trechos) fora da tela principal, para nao travar
+                val alerts by androidx.compose.runtime.produceState(emptyList<com.motorota.nav.AlongAlert>(), r, vm.hazards, vm.liveIncidents, vm.knownRisksOn) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { vm.alertsOn(r) }
+                }
                 val nRadar = alerts.count { it.isRadar }
                 val nOther = alerts.size - nRadar
                 if (alerts.isNotEmpty()) {
@@ -391,6 +394,17 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 }
                 // areas de risco conhecidas pelas quais a rota passa ao lado (via expressa)
                 val nKnown = alerts.count { it.key.startsWith("kr-") }
+                // rodovias com muitos assaltos por onde a rota passa
+                val coHits by androidx.compose.runtime.produceState(emptyList<com.motorota.data.CorridorHit>(), r, vm.knownRisksOn) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { vm.corridorHits(r) }
+                }
+                coHits.groupBy { it.corridor.name.substringBefore(" (") }.forEach { (nome, hs) ->
+                    val km = (hs.sumOf { it.lengthM } / 1000).coerceAtLeast(1.0)
+                    Text(
+                        "🚨 Passa ${"%.0f".format(km)} km pela $nome: muitos assaltos, evite parar",
+                        color = Color(0xFFFF8A80), fontSize = 13.sp,
+                    )
+                }
                 if (nKnown > 0) {
                     Text("🚨 Passa ao lado de $nKnown área(s) de risco: aviso por voz, evite parar", color = Color(0xFFFF8A80), fontSize = 13.sp)
                 }

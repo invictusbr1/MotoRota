@@ -98,6 +98,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (destination != null && !navigating) recalc(fit = false)
     }
     fun known(): List<com.motorota.data.KnownRisk> = if (knownRisksOn) com.motorota.data.KnownRisks.all else emptyList()
+    fun corridors(): List<com.motorota.data.Corridor> = if (knownRisksOn) com.motorota.data.Corridors.all else emptyList()
+    /** trechos perigosos por onde a rota passa (para o painel) */
+    fun corridorHits(r: RouteResult) = com.motorota.data.Corridors.hits(r, corridors())
 
     // ---------- autonomia do tanque ----------
     /** quantos km a moto roda com um tanque (0 = nao usar) */
@@ -182,6 +185,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var generation = 0
+    /** fica pronto quando as areas e trechos de risco terminam de carregar (as rotas esperam por isso) */
+    private val riskDataReady = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     // ---------- transito ao vivo (TomTom) ----------
     /** ocorrencias de agora que estao no caminho (acidente, obra, alagamento...) */
@@ -244,7 +249,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (found.isNotEmpty()) "${found.size} ocorrência(s) agora no caminho" else null,
                 ).joinToString(" · ")
             }
-            if (navigating) currentRoute?.let { alongAlerts = alertsOn(it) }
+            if (navigating) currentRoute?.let { refreshAlertsAsync(it) }
         }
     }
     private var routeJob: Job? = null
@@ -264,13 +269,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             update = com.motorota.data.Updater.check()
         }
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            radarStore.load()
+            // primeiro as areas/trechos de risco (rapido e a rota depende deles), depois os radares
             runCatching { com.motorota.data.KnownRisks.load(app) }
                 .onFailure { android.util.Log.w("MotoRota", "areas de risco: $it") }
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                radarsVersion++
-                knownRisksVersion++
-            }
+            runCatching { com.motorota.data.Corridors.load(app) }
+                .onFailure { android.util.Log.w("MotoRota", "trechos perigosos: $it") }
+            riskDataReady.complete(Unit)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { knownRisksVersion++ }
+            radarStore.load()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { radarsVersion++ }
         }
         tts = TextToSpeech(app) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -440,7 +447,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         routeJob = viewModelScope.launch {
             for (m in order) {
                 try {
-                    val r = engine.route(pts, m, blocked(), known())
+                    riskDataReady.await()
+                    val r = engine.route(pts, m, blocked(), known(), corridors())
                     if (gen != generation) return@launch
                     routes = routes + (m to r)
                     if (m == mode) {
@@ -476,7 +484,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             origin = null
         }
         navigator = Navigator(r)
-        alongAlerts = alertsOn(r)
+        alongAlerts = emptyList()
+        // radares/trechos ao longo da rota: calcula em segundo plano (nao trava o inicio)
+        viewModelScope.launch {
+            val a = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { alertsOn(r) }
+            if (navigator?.route === r) alongAlerts = a
+        }
         tripDistM = 0.0
         tripMaxKmh = 0
         tripMovingS = 0.0
@@ -515,13 +528,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val m = mode
         viewModelScope.launch {
             try {
-                val r = engine.route(pts, m, blocked(), known())
+                riskDataReady.await()
+                val r = engine.route(pts, m, blocked(), known(), corridors())
                 routes = mapOf(m to r)
                 routeErrors = emptyMap()
                 navigator = Navigator(r)
                 offRouteCount = 0
                 checkTraffic(r, generation)
-                alongAlerts = alertsOn(r)
+                refreshAlertsAsync(r)
             } catch (e: Throwable) {
                 // pilotando: nada de instrucao comprida; tenta de novo nas proximas posicoes do GPS
                 message = if (navigating) "Procurando caminho a partir daqui…" else e.message
@@ -586,7 +600,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         hazards = hazards + h
         hazardStore.save(hazards)
         message = "${type.emoji} ${type.label} marcado. Vale por ${if (type.hoursValid >= 48) "${type.hoursValid / 24} dias" else "${type.hoursValid} h"}."
-        currentRoute?.let { if (navigating) alongAlerts = alertsOn(it) }
+        currentRoute?.let { if (navigating) refreshAlertsAsync(it) }
     }
 
     fun removeHazard(id: Long) {
@@ -741,7 +755,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** radares e alertas em cima da rota escolhida (para o resumo antes de sair) */
-    fun alertsOn(r: RouteResult) = com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards, liveIncidents, known())
+    /** recalcula os avisos ao longo da rota em segundo plano (sao contas pesadas em rota longa) */
+    private fun refreshAlertsAsync(r: RouteResult) {
+        viewModelScope.launch {
+            val a = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { alertsOn(r) }
+            if (navigator?.route === r) alongAlerts = a
+        }
+    }
+
+    fun alertsOn(r: RouteResult) =
+        com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards, liveIncidents, known(), corridorHits(r))
 
     // ---------- mapas ----------
     var downloadProgress by mutableStateOf(MapDownloader.Progress(0, 0, 0, 0)); private set

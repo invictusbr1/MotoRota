@@ -28,6 +28,7 @@ object RouteAlerts {
         hazards: List<Hazard>,
         live: List<com.motorota.data.LiveIncident> = emptyList(),
         known: List<com.motorota.data.KnownRisk> = emptyList(),
+        corridorHits: List<com.motorota.data.CorridorHit> = emptyList(),
     ): List<AlongAlert> {
         val pts = route.points
         if (pts.size < 2) return emptyList()
@@ -97,6 +98,20 @@ object RouteAlerts {
                     emoji = if (k.avoid) "🚨" else "⚠️",
                     title = (if (k.avoid) "Área de risco · " else "Atenção · ") + curto,
                     speech = if (k.avoid) "área de risco à frente, $curto. Evite parar." else "atenção, ${k.reason}. Evite parar.",
+                )
+            )
+        }
+        // trechos de rodovia com muitos assaltos
+        for (h in corridorHits) {
+            val curto = h.corridor.name.substringBefore(" (")
+            val km = (h.lengthM / 1000).let { if (it >= 1) "${it.toInt()} quilômetros" else "${h.lengthM.toInt()} metros" }
+            out.add(
+                AlongAlert(
+                    key = "co-${h.corridor.name}-${h.fromM.toInt()}",
+                    posM = (h.fromM - 300).coerceAtLeast(0.0),
+                    emoji = "🚨",
+                    title = "Trecho perigoso · $curto",
+                    speech = "atenção, $curto: trecho com ${h.corridor.reason}. São $km. Evite parar e mantenha distância.",
                 )
             )
         }

@@ -26,6 +26,10 @@ E mais:
 - 🌧️ **Chuva e pôr do sol no caminho**: ao traçar a rota, mostra se há chuva prevista nos pontos do trajeto, na hora em que você vai passar ([Open-Meteo](https://open-meteo.com), grátis), e se vai pegar noite.
 - 🚦 **Trânsito ao vivo** ([TomTom](https://developer.tomtom.com)): desvia de vias interditadas e avisa acidentes, obras, alagamentos e trânsito parado.
 - 🚨 **Áreas de risco conhecidas** ([app/src/main/assets/areas_risco.csv](app/src/main/assets/areas_risco.csv)): 32 áreas para evitar no Grande Rio (tiroteios frequentes, segundo o Instituto Fogo Cruzado) e 10 de atenção (roubos de moto em SP, homicídios em Porto Alegre). A rota desvia das ruas internas, mas continua usando as vias expressas da borda (Linha Vermelha, Av. Brasil), e a voz avisa "evite parar" ao passar ao lado. Dá para desligar em ⚙️.
+- 🛣️ **Rodovias com muitos assaltos** ([app/src/main/assets/trechos_risco.json](app/src/main/assets/trechos_risco.json)): Washington Luís (BR-040), Rio–Magé (BR-116), Arco Metropolitano (BR-493), Linha Amarela, Avenida Brasil e Rodoanel Mário Covas. Cada trecho tem dois pesos:
+  - **na própria rodovia**: forte no Rodoanel (a rota contorna pela cidade, ex.: Marginais), leve nas que não têm alternativa (a rota passa, mas avisa por voz "evite parar");
+  - **na redondeza (~1,5 km)**: as ruas locais em volta ficam "caras", para o app nunca trocar a rodovia pelos bairros vizinhos.
+  À noite (19h–6h) e no fim de semana os pesos aumentam. O motor BRouter foi adaptado para isso (`CorridorIndex`).
 
 ## Como instalar no celular
 

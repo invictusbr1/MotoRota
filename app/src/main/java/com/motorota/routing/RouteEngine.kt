@@ -47,9 +47,10 @@ class RouteEngine(private val ctx: Context) {
         mode: Mode,
         risks: List<RiskArea>,
         known: List<com.motorota.data.KnownRisk> = emptyList(),
+        corridors: List<com.motorota.data.Corridor> = emptyList(),
     ): RouteResult =
         lock.withLock {
-            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks, known) }
+            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks, known, corridors) }
         }
 
     private fun routeBlocking(
@@ -57,48 +58,71 @@ class RouteEngine(private val ctx: Context) {
         mode: Mode,
         risks: List<RiskArea>,
         known: List<com.motorota.data.KnownRisk>,
+        corridors: List<com.motorota.data.Corridor>,
     ): RouteResult {
         require(points.size >= 2)
-        val collector = RoutingParamCollector()
-        val lonlats = points.joinToString("|") { "${it.lon},${it.lat}" }
-        val wpList = collector.getWayPointList(lonlats)
+        fun attempt(corridorScale: Double?): Pair<RoutingEngine, RoutingContext> {
+            val collector = RoutingParamCollector()
+            val lonlats = points.joinToString("|") { "${it.lon},${it.lat}" }
+            val wpList = collector.getWayPointList(lonlats)
 
-        val rc = RoutingContext()
-        rc.localFunction = File(profileDir, "moto.brf").absolutePath
-        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        rc.memoryclass = am.largeMemoryClass.coerceIn(64, 512)
+            val rc = RoutingContext()
+            rc.localFunction = File(profileDir, "moto.brf").absolutePath
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            rc.memoryclass = am.largeMemoryClass.coerceIn(64, 512)
 
-        val params = HashMap<String, String>()
-        params["profile:modo"] = mode.code.toString()
-        val nogos = ArrayList<String>()
-        if (risks.isNotEmpty()) {
-            // areas marcadas por voces: bloqueio total. No modo Segura a margem e 50% maior.
-            val factor = if (mode == Mode.SEGURA) 1.5 else 1.0
-            for (rk in risks) {
-                val r = (rk.radiusM * factor).toInt()
-                // se a partida, uma parada ou o destino estiver DENTRO da area, bloqueio total deixaria
-                // a moto "presa" (sem rota para sair/chegar): nesse caso vira area com peso alto.
-                val trapped = points.any { it.distanceTo(rk.point) <= r + 30 }
-                nogos.add("${rk.point.lon},${rk.point.lat},$r" + if (trapped) ",30" else "")
+            val params = HashMap<String, String>()
+            params["profile:modo"] = mode.code.toString()
+            val nogos = ArrayList<String>()
+            if (risks.isNotEmpty()) {
+                // areas marcadas por voces: bloqueio total. No modo Segura a margem e 50% maior.
+                val factor = if (mode == Mode.SEGURA) 1.5 else 1.0
+                for (rk in risks) {
+                    val r = (rk.radiusM * factor).toInt()
+                    // se a partida, uma parada ou o destino estiver DENTRO da area, bloqueio total deixaria
+                    // a moto "presa" (sem rota para sair/chegar): nesse caso vira area com peso alto.
+                    val trapped = points.any { it.distanceTo(rk.point) <= r + 30 }
+                    nogos.add("${rk.point.lon},${rk.point.lat},$r" + if (trapped) ",30" else "")
+                }
+            }
+            // areas conhecidas (vem com o app): penalidade por metro rodado DENTRO da area.
+            // O perfil (risk_area_factor) faz rodovia/via expressa da borda pagar quase nada,
+            // e as ruas internas pagarem tudo. Assim ainda da para chegar se o destino for la dentro.
+            val weight = when (mode) {
+                Mode.SEGURA -> 20
+                Mode.DESEMPENHO -> 10
+                Mode.RAPIDA -> 5
+            }
+            known.filter { it.avoid }.mapTo(nogos) { "${it.point.lon},${it.point.lat},${it.radiusM},$weight" }
+            if (nogos.isNotEmpty()) params["nogos"] = nogos.joinToString("|")
+            // trechos de rodovia com muitos assaltos: a propria rodovia fica "mais cara" por metro.
+            // Segura foge bem mais; Rapida quase nao liga (so avisa).
+            if (corridors.isNotEmpty() && corridorScale != null) {
+                val modeFactor = when (mode) {
+                    Mode.SEGURA -> 1.5
+                    Mode.DESEMPENHO -> 1.0
+                    Mode.RAPIDA -> 0.3
+                }
+                rc.corridors = com.motorota.data.Corridors.index(corridors, modeFactor * corridorScale)
+            }
+            collector.setParams(rc, wpList, params)
+
+            val t0 = System.currentTimeMillis()
+            val engine = RoutingEngine(null, null, segmentDir, wpList, rc)
+            engine.quite = true
+            engine.doRun(180_000)
+            android.util.Log.i("MotoRota", "rota ${mode.label}: ${System.currentTimeMillis() - t0} ms, trechos=$corridorScale, erro=${engine.errorMessage}")
+            return engine to rc
+        }
+        // O BRouter as vezes nao consegue "refazer" a rota final quando ha custo extra
+        // (erro "re-tracking"). Nesse caso tenta com o peso um pouco diferente e, por fim, sem os trechos.
+        var (engine, rc) = attempt(1.0)
+        if (engine.errorMessage?.contains("re-tracking") == true) {
+            attempt(0.85).let { engine = it.first; rc = it.second }
+            if (engine.errorMessage?.contains("re-tracking") == true) {
+                attempt(null).let { engine = it.first; rc = it.second }
             }
         }
-        // areas conhecidas (vem com o app): penalidade por metro rodado DENTRO da area.
-        // O perfil (risk_area_factor) faz rodovia/via expressa da borda pagar quase nada,
-        // e as ruas internas pagarem tudo. Assim ainda da para chegar se o destino for la dentro.
-        val weight = when (mode) {
-            Mode.SEGURA -> 20
-            Mode.DESEMPENHO -> 10
-            Mode.RAPIDA -> 5
-        }
-        known.filter { it.avoid }.mapTo(nogos) { "${it.point.lon},${it.point.lat},${it.radiusM},$weight" }
-        if (nogos.isNotEmpty()) params["nogos"] = nogos.joinToString("|")
-        collector.setParams(rc, wpList, params)
-
-        val t0 = System.currentTimeMillis()
-        val engine = RoutingEngine(null, null, segmentDir, wpList, rc)
-        engine.quite = true
-        engine.doRun(180_000)
-        android.util.Log.i("MotoRota", "rota ${mode.label}: ${System.currentTimeMillis() - t0} ms, erro=${engine.errorMessage}")
 
         engine.errorMessage?.let { throw RouteException(translateError(it)) }
         val track = engine.foundTrack ?: throw RouteException("Não foi possível calcular a rota.")

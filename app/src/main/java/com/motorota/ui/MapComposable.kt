@@ -140,7 +140,10 @@ fun MapLibreMapView(
         style?.let { MapLayers.updateRisks(it, vm.risks) }
     }
     LaunchedEffect(style, vm.knownRisksVersion) {
-        style?.let { MapLayers.updateKnownRisks(it, vm.known()) }
+        style?.let {
+            MapLayers.updateKnownRisks(it, vm.known())
+            MapLayers.updateCorridors(it, vm.corridors())
+        }
     }
     LaunchedEffect(style, vm.origin, vm.stops, vm.destination) {
         style?.let { MapLayers.updateWaypoints(it, vm.origin, vm.stops, vm.destination) }

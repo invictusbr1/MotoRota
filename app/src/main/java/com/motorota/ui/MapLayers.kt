@@ -29,6 +29,7 @@ object MapLayers {
     private const val SRC_ROUTES = "mr-routes"
     private const val SRC_RISKS = "mr-risks"
     private const val SRC_KNOWN = "mr-known"
+    private const val SRC_CORRIDORS = "mr-corridors"
     private const val SRC_WPS = "mr-wps"
     private const val SRC_RADARS = "mr-radars"
     private const val SRC_HAZARDS = "mr-hazards"
@@ -149,6 +150,7 @@ object MapLayers {
     fun setup(style: Style) {
         style.addSource(GeoJsonSource(SRC_RISKS))
         style.addSource(GeoJsonSource(SRC_KNOWN))
+        style.addSource(GeoJsonSource(SRC_CORRIDORS))
         style.addSource(GeoJsonSource(SRC_ROUTES))
         style.addSource(GeoJsonSource(SRC_WPS))
         style.addSource(GeoJsonSource(SRC_RADARS))
@@ -182,6 +184,16 @@ object MapLayers {
             LineLayer("mr-risk-line", SRC_RISKS).withProperties(
                 PropertyFactory.lineColor("#E53935"),
                 PropertyFactory.lineWidth(2f),
+            )
+        )
+        // rodovias com muitos assaltos: faixa vermelha larga e transparente por baixo da via
+        below(
+            LineLayer("mr-corridor", SRC_CORRIDORS).withProperties(
+                PropertyFactory.lineColor("#D32F2F"),
+                PropertyFactory.lineOpacity(0.35f),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.linear(), Expression.zoom(),
+                    Expression.stop(8, 3f), Expression.stop(12, 8f), Expression.stop(16, 18f))),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             )
         )
         // areas de risco conhecidas (vem com o app): vermelho escuro = evitar, laranja = atencao
@@ -350,6 +362,14 @@ object MapLayers {
     fun updateRisks(style: Style, risks: List<RiskArea>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_RISKS) ?: return
         src.setGeoJson(FeatureCollection.fromFeatures(risks.map { Feature.fromGeometry(circle(it.point, it.radiusM.toDouble())) }))
+    }
+
+    fun updateCorridors(style: Style, list: List<com.motorota.data.Corridor>) {
+        val src = style.getSourceAs<GeoJsonSource>(SRC_CORRIDORS) ?: return
+        val feats = list.flatMap { c ->
+            c.lines.map { l -> Feature.fromGeometry(org.maplibre.geojson.LineString.fromLngLats(l.map { Point.fromLngLat(it.lon, it.lat) })) }
+        }
+        src.setGeoJson(FeatureCollection.fromFeatures(feats))
     }
 
     fun updateKnownRisks(style: Style, list: List<com.motorota.data.KnownRisk>) {

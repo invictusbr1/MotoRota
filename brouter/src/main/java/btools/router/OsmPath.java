@@ -123,6 +123,8 @@ abstract class OsmPath implements OsmLinkHolder {
     boolean recordTransferNodes = detailMode;
 
     rc.nogoCost = 0.;
+    rc.corridorCost = 0.;
+    rc.regionCost = 0.;
 
     // extract the 3 positions of the first section
     int lon0 = origin.originLon;
@@ -276,6 +278,13 @@ abstract class OsmPath implements OsmLinkHolder {
         message.linkdist += dist;
       }
       linkdisttotal += dist;
+
+      // MotoRota: trechos perigosos (rodovia com muitos assaltos e a redondeza dela).
+      // A redondeza vale cheia nas ruas locais e quase nada em rodovia (risk_area_factor do perfil).
+      if (rc.corridors != null && dist > 0) {
+        cost += (int) (rc.corridors.cost(lon1, lat1, lon2, lat2, dist)
+          + rc.corridors.regionCost(lon1, lat1, lon2, lat2, dist) * riskFactor);
+      }
 
       // apply a start-direction if appropriate (by faking the origin position)
       if (isStartpoint) {

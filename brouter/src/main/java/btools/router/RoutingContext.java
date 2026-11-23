@@ -229,6 +229,12 @@ public final class RoutingContext {
   public CheapAngleMeter anglemeter = new CheapAngleMeter();
 
   public double nogoCost = 0.;
+  /** MotoRota: custo dos "trechos perigosos" (poligonos fechados com peso), somado por metro rodado dentro */
+  public double corridorCost = 0.;
+  /** MotoRota: indice dos trechos perigosos (null = nenhum) */
+  public CorridorIndex corridors;
+  /** MotoRota: custo da redondeza dos trechos perigosos (multiplicado pelo tipo de via no OsmPath) */
+  public double regionCost = 0.;
   public boolean isEndpoint = false;
 
   public boolean shortestmatch = false;
@@ -493,9 +499,13 @@ public final class RoutingContext {
                 // default nogo behaviour (ignore completely)
                 nogoCost = -1;
               } else {
-                // nogo weight, compute distance within the circle
+                // nogo weight, compute distance within the circle (MotoRota: soma todos os pedacos)
                 nogoCost = nogo.distanceWithinRadius(lon1, lat1, lon2, lat2, d) * nogo.nogoWeight;
               }
+            } else if (((OsmNogoPolygon) nogo).isClosed && !Double.isNaN(nogo.nogoWeight)) {
+              // MotoRota: faixa com peso (trecho perigoso). O segmento que fica INTEIRO dentro
+              // da faixa tambem conta (o "intersects" abaixo so ve quem cruza a borda).
+              nogoCost = ((OsmNogoPolygon) nogo).distanceWithinPolygon(lon1, lat1, lon2, lat2) * nogo.nogoWeight;
             } else if (((OsmNogoPolygon) nogo).intersects(lon1, lat1, lon2, lat2)) {
               // nogo is a polyline/polygon, we have to check there is indeed
               // an intersection in this case (radius check is not enough).
