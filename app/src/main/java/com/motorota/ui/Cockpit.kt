@@ -196,11 +196,11 @@ fun SettingsDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                         Text("🚨 Áreas de risco conhecidas", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         val n = com.motorota.data.KnownRisks.all
                         Text(
-                            "${n.count { it.avoid }} áreas para evitar, ${n.count { !it.avoid }} de atenção e " +
-                                "${com.motorota.data.Corridors.all.size} rodovias com muitos assaltos " +
-                                "(${com.motorota.data.Corridors.all.joinToString { it.name.substringBefore(" (") }}). " +
-                                "A rota procura o caminho mais seguro e avisa por voz quando não tem como evitar. " +
-                                "À noite e no fim de semana o app evita esses trechos com mais força.",
+                            "${n.count { it.avoid }} comunidades para evitar, ${n.count { !it.avoid }} pontos de atenção, " +
+                                "${com.motorota.data.Corridors.all.size} rodovias com muitos assaltos (só aviso por voz) e " +
+                                "${com.motorota.data.Corridors.zones.count { it.dense }} áreas urbanas densas. " +
+                                "Regra: rodovia que passa por fora é melhor que rodovia dentro da cidade, " +
+                                "que é melhor que rua de bairro. À noite e no fim de semana o app foge mais da área urbana.",
                             color = TextDim, fontSize = 13.sp,
                         )
                     }

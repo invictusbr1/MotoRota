@@ -45,8 +45,16 @@ data class CorridorHit(val corridor: Corridor, val fromM: Double, val toM: Doubl
     val lengthM get() = toM - fromM
 }
 
+/** Zona do calculo de rota: M = regiao metropolitana (so ruas pagam), D = area urbana densa (todas pagam). */
+data class UrbanZone(val dense: Boolean, val point: GeoPoint, val radiusM: Double, val name: String)
+
 object Corridors {
     @Volatile var all: List<Corridor> = emptyList(); private set
+    @Volatile var zones: List<UrbanZone> = emptyList(); private set
+
+    /** peso por metro (modo Desempenho, de dia): ruas na regiao metropolitana / qualquer via em area densa */
+    private const val METRO_WEIGHT = 1.0
+    private const val DENSE_WEIGHT = 4.0
 
     /** meia-largura da faixa em volta do eixo de cada pista (pega a pista e as marginais coladas) */
     private const val HALF_WIDTH_M = 35.0
@@ -74,6 +82,14 @@ object Corridors {
             )
         }
         all = out
+        zones = ctx.assets.open("zonas_risco.csv").bufferedReader().useLines { lines ->
+            lines.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("tipo") }
+                .mapNotNull { l ->
+                    val c = l.split(';')
+                    if (c.size < 5) null
+                    else UrbanZone(c[0].trim() == "D", GeoPoint(c[1].toDouble(), c[2].toDouble()), c[3].toDouble(), c[4].trim())
+                }.toList()
+        }
     }
 
     /** Peso de verdade agora: mais forte a noite e no fim de semana (quando ha mais assalto a moto). */
@@ -86,9 +102,18 @@ object Corridors {
     }
 
     /** Indice rapido (grade) para o BRouter: cada metro rodado dentro da faixa paga o peso do trecho. */
-    fun index(list: List<Corridor>, modeFactor: Double, now: LocalDateTime = LocalDateTime.now()): btools.router.CorridorIndex {
+    fun index(
+        list: List<Corridor>,
+        modeFactor: Double,
+        zoneList: List<UrbanZone> = emptyList(),
+        now: LocalDateTime = LocalDateTime.now(),
+    ): btools.router.CorridorIndex {
         val ix = btools.router.CorridorIndex(HALF_WIDTH_M)
         val time = factorNow(now)
+        for (z in zoneList) {
+            val w = (if (z.dense) DENSE_WEIGHT * time else METRO_WEIGHT) * modeFactor
+            ix.addArea(z.point.lat, z.point.lon, z.radiusM, w, z.dense)
+        }
         for (c in list) {
             val w = c.weight * modeFactor * (if (c.worseAtNight) time else 1.0)
             val wr = c.regionWeight * modeFactor * (if (c.worseAtNight) time else 1.0)

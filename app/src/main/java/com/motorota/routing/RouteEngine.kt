@@ -48,9 +48,10 @@ class RouteEngine(private val ctx: Context) {
         risks: List<RiskArea>,
         known: List<com.motorota.data.KnownRisk> = emptyList(),
         corridors: List<com.motorota.data.Corridor> = emptyList(),
+        zones: List<com.motorota.data.UrbanZone> = emptyList(),
     ): RouteResult =
         lock.withLock {
-            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks, known, corridors) }
+            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks, known, corridors, zones) }
         }
 
     private fun routeBlocking(
@@ -59,6 +60,7 @@ class RouteEngine(private val ctx: Context) {
         risks: List<RiskArea>,
         known: List<com.motorota.data.KnownRisk>,
         corridors: List<com.motorota.data.Corridor>,
+        zones: List<com.motorota.data.UrbanZone>,
     ): RouteResult {
         require(points.size >= 2)
         fun attempt(corridorScale: Double?): Pair<RoutingEngine, RoutingContext> {
@@ -88,22 +90,25 @@ class RouteEngine(private val ctx: Context) {
             // areas conhecidas (vem com o app): penalidade por metro rodado DENTRO da area.
             // O perfil (risk_area_factor) faz rodovia/via expressa da borda pagar quase nada,
             // e as ruas internas pagarem tudo. Assim ainda da para chegar se o destino for la dentro.
+            // (pesos altos demais distorcem a busca rapida do BRouter: o Segura chegava a sair da
+            //  Linha Vermelha por ruas do Fundao. 8/6/4 evitam as ruas internas sem esse efeito.)
             val weight = when (mode) {
-                Mode.SEGURA -> 20
-                Mode.DESEMPENHO -> 10
-                Mode.RAPIDA -> 5
+                Mode.SEGURA -> 8
+                Mode.DESEMPENHO -> 6
+                Mode.RAPIDA -> 4
             }
             known.filter { it.avoid }.mapTo(nogos) { "${it.point.lon},${it.point.lat},${it.radiusM},$weight" }
             if (nogos.isNotEmpty()) params["nogos"] = nogos.joinToString("|")
-            // trechos de rodovia com muitos assaltos: a propria rodovia fica "mais cara" por metro.
-            // Segura foge bem mais; Rapida quase nao liga (so avisa).
-            if (corridors.isNotEmpty() && corridorScale != null) {
-                val modeFactor = when (mode) {
-                    Mode.SEGURA -> 1.5
-                    Mode.DESEMPENHO -> 1.0
-                    Mode.RAPIDA -> 0.3
-                }
-                rc.corridors = com.motorota.data.Corridors.index(corridors, modeFactor * corridorScale)
+            // Trechos perigosos + zonas urbanas. Principio: rodovia isolada > rodovia na area urbana
+            // > rua de bairro. Rapida = menor tempo (so avisa); Desempenho prefere rodovia por fora;
+            // Segura idem, mais forte.
+            val modeFactor = when (mode) {
+                Mode.SEGURA -> 1.6
+                Mode.DESEMPENHO -> 1.0
+                Mode.RAPIDA -> 0.0
+            }
+            if ((corridors.isNotEmpty() || zones.isNotEmpty()) && corridorScale != null && modeFactor > 0) {
+                rc.corridors = com.motorota.data.Corridors.index(corridors, modeFactor * corridorScale, zones)
             }
             collector.setParams(rc, wpList, params)
 
@@ -117,16 +122,25 @@ class RouteEngine(private val ctx: Context) {
         // O BRouter as vezes nao consegue "refazer" a rota final quando ha custo extra
         // (erro "re-tracking"). Nesse caso tenta com o peso um pouco diferente e, por fim, sem os trechos.
         var (engine, rc) = attempt(1.0)
+        var note: String? = null
         if (engine.errorMessage?.contains("re-tracking") == true) {
             attempt(0.85).let { engine = it.first; rc = it.second }
             if (engine.errorMessage?.contains("re-tracking") == true) {
                 attempt(null).let { engine = it.first; rc = it.second }
+                note = "⚠️ Rota calculada sem os desvios de segurança (o cálculo não fechou). Confira o caminho."
+            }
+        } else if (engine.errorMessage?.contains("timeout", true) == true && corridors.isNotEmpty()) {
+            // celular mais lento: calcula sem as zonas/trechos (bem mais rapido) e avisa
+            attempt(null).let { engine = it.first; rc = it.second }
+            if (engine.errorMessage == null) {
+                note = "⚠️ O cálculo seguro demorou demais neste celular: esta rota não desvia de áreas urbanas. " +
+                    "Tente o modo Segura ou ponha uma parada no meio."
             }
         }
 
         engine.errorMessage?.let { throw RouteException(translateError(it)) }
         val track = engine.foundTrack ?: throw RouteException("Não foi possível calcular a rota.")
-        return parse(mode, FormatJson(rc).format(track))
+        return parse(mode, FormatJson(rc).format(track)).copy(note = note)
     }
 
     private fun translateError(msg: String): String = when {

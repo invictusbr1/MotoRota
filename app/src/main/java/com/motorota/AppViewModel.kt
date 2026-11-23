@@ -99,6 +99,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun known(): List<com.motorota.data.KnownRisk> = if (knownRisksOn) com.motorota.data.KnownRisks.all else emptyList()
     fun corridors(): List<com.motorota.data.Corridor> = if (knownRisksOn) com.motorota.data.Corridors.all else emptyList()
+    fun zones(): List<com.motorota.data.UrbanZone> = if (knownRisksOn) com.motorota.data.Corridors.zones else emptyList()
     /** trechos perigosos por onde a rota passa (para o painel) */
     fun corridorHits(r: RouteResult) = com.motorota.data.Corridors.hits(r, corridors())
 
@@ -448,7 +449,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             for (m in order) {
                 try {
                     riskDataReady.await()
-                    val r = engine.route(pts, m, blocked(), known(), corridors())
+                    val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
                     if (gen != generation) return@launch
                     routes = routes + (m to r)
                     if (m == mode) {
@@ -529,7 +530,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 riskDataReady.await()
-                val r = engine.route(pts, m, blocked(), known(), corridors())
+                val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
                 routes = mapOf(m to r)
                 routeErrors = emptyMap()
                 navigator = Navigator(r)

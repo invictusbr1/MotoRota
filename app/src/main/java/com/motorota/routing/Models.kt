@@ -6,10 +6,13 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** Os 3 jeitos de tracar a rota. `code` e o valor passado para o perfil moto.brf. */
-enum class Mode(val code: Int, val label: String, val emoji: String, val colorHex: String) {
-    SEGURA(0, "Segura", "🛡️", "#26C281"),
-    DESEMPENHO(1, "Desempenho", "🏍️", "#FFB300"),
-    RAPIDA(2, "Rápida", "⚡", "#3D9BFF"),
+enum class Mode(val code: Int, val label: String, val emoji: String, val colorHex: String, val hint: String) {
+    SEGURA(0, "Segura", "🛡️", "#26C281",
+        "Foge com mais força de área urbana densa e áreas de risco. Pode alongar bem."),
+    DESEMPENHO(1, "Desempenho", "🏍️", "#FFB300",
+        "Prefere rodovia que passa por fora (ex.: Arco em vez da Dutra na Baixada, contorna SP)."),
+    RAPIDA(2, "Rápida", "⚡", "#3D9BFF",
+        "Menor tempo. Passa por cidade se for mais rápido; só avisa dos trechos perigosos."),
 }
 
 data class GeoPoint(val lat: Double, val lon: Double) {
@@ -37,6 +40,8 @@ data class RouteHint(
 
 data class RouteResult(
     val mode: Mode,
+    /** aviso sobre como a rota foi calculada (ex.: sem as zonas urbanas porque demorou demais) */
+    val note: String? = null,
     val points: List<GeoPoint>,
     /** distancia acumulada (m) ate cada ponto */
     val cumDist: DoubleArray,

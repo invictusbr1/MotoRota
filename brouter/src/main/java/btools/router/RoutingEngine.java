@@ -1927,7 +1927,9 @@ public class RoutingEngine extends Thread {
   private OsmTrack _findTrack(String operationName, MatchedWaypoint startWp, MatchedWaypoint endWp, OsmTrack costCuttingTrack, OsmTrack refTrack, boolean fastPartialRecalc) {
     boolean verbose = guideTrack != null;
 
-    int maxTotalCost = guideTrack != null ? guideTrack.cost + 5000 : 1000000000;
+    // MotoRota: folga proporcional (viagem longa com custos extras por trecho/zona acumula
+    // pequenas diferencas de arredondamento; com folga fixa de 5000 o "re-tracking" falhava)
+    int maxTotalCost = guideTrack != null ? guideTrack.cost + Math.max(5000, guideTrack.cost / 20) : 1000000000;
     int firstMatchCost = 1000000000;
 
     logInfo("findtrack with airDistanceCostFactor=" + airDistanceCostFactor);

@@ -1,0 +1,19 @@
+# Zonas usadas no calculo da rota (MotoRota).
+# Principio (relato dos motociclistas): rodovia isolada e mais segura que rodovia cortando area
+# urbana densa, que e mais segura que rua de bairro. Bandido age mais onde o transito para.
+# tipo M = regiao metropolitana: so as ruas pagam; rodovia/via expressa quase nada (preferir a via expressa)
+# tipo D = area urbana densa de risco: todas as vias pagam, a rodovia menos (preferir rodovia que passa por fora)
+tipo;lat;lon;raio_m;nome
+M;-22.850;-43.350;40000;Grande Rio
+M;-23.550;-46.630;35000;Grande São Paulo
+D;-22.764;-43.399;5000;Belford Roxo
+D;-22.759;-43.451;6000;Nova Iguaçu
+D;-22.804;-43.372;4000;São João de Meriti
+D;-22.797;-43.420;3500;Nilópolis / Mesquita
+D;-22.716;-43.555;4000;Queimados
+D;-22.785;-43.311;4500;Duque de Caxias
+D;-22.715;-43.325;3500;Duque de Caxias (2º distrito)
+D;-22.835;-43.330;6000;Zona Norte (Pavuna, Irajá, Penha, Madureira)
+D;-22.875;-43.455;5000;Bangu / Realengo
+D;-22.827;-43.060;7000;São Gonçalo
+D;-23.548;-46.636;7000;Centro de São Paulo

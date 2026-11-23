@@ -145,6 +145,8 @@ abstract class OsmPath implements OsmLinkHolder {
     // MotoRota: o perfil diz quanto das "areas de risco com peso" vale nesta via
     // (ex.: quase nada em rodovia/via expressa que so passa pela borda, cheio nas ruas internas)
     float riskFactor = rc.expctxWay.getVariableValue("risk_area_factor", 1f);
+    // MotoRota: zonas urbanas de risco valem para todas as vias (rua local cheio, rodovia menos)
+    float urbanFactor = rc.expctxWay.getVariableValue("urban_zone_factor", 1f);
 
     // and check if is useful
     if (rc.ai != null && rc.ai.polygon.isWithin(lon1, lat1)) {
@@ -283,7 +285,8 @@ abstract class OsmPath implements OsmLinkHolder {
       // A redondeza vale cheia nas ruas locais e quase nada em rodovia (risk_area_factor do perfil).
       if (rc.corridors != null && dist > 0) {
         cost += (int) (rc.corridors.cost(lon1, lat1, lon2, lat2, dist)
-          + rc.corridors.regionCost(lon1, lat1, lon2, lat2, dist) * riskFactor);
+          + rc.corridors.regionCost(lon1, lat1, lon2, lat2, dist) * riskFactor
+          + rc.corridors.zoneCost(lon1, lat1, lon2, lat2, dist) * urbanFactor);
       }
 
       // apply a start-direction if appropriate (by faking the origin position)

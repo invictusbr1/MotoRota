@@ -209,8 +209,15 @@ assign costfactor =
 # Rodovia/via expressa que so passa pela borda (Linha Vermelha, Av. Brasil) quase nao paga;
 # as ruas internas pagam tudo, entao a rota nao "corta caminho" por dentro.
 assign risk_area_factor =
-    switch highway=motorway|motorway_link|trunk|trunk_link  0.03
+    switch highway=motorway|motorway_link|trunk|trunk_link  0.01
     switch highway=primary|primary_link  0.4
+    1
+
+# Zonas urbanas de risco (Baixada, Zona Norte, centro de SP...): todas as vias pagam, mas
+# a rodovia paga menos que a rua de bairro. Rodovia isolada > rodovia na area urbana > rua local.
+assign urban_zone_factor =
+    switch highway=motorway|motorway_link|trunk|trunk_link  0.35
+    switch highway=primary|primary_link  0.7
     1
 
 assign minspeed =

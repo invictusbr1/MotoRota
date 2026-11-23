@@ -24,6 +24,7 @@ public final class CorridorIndex {
   // ---- montagem (so usado enquanto adiciona linhas) ----
   private final HashMap<Long, List<double[]>> build = new HashMap<>();
   private final HashMap<Long, Double> buildRegion = new HashMap<>();
+  private final HashMap<Long, Double> buildZone = new HashMap<>();
   // volatile: o indice pode ser consultado por mais de uma thread depois de montado
   private volatile boolean frozen = false;
 
@@ -32,6 +33,9 @@ public final class CorridorIndex {
   private double[][] gSegs;      // segmentos da celula, achatados: lat1,lon1,lat2,lon2,peso,...
   private long[] rKeys;          // celula da redondeza
   private double[] rVals;
+  private long[] zKeys;          // celula de zona urbana de risco
+  private double[] zVals;
+  private int zMask;
   private int gMask, rMask;
   // caixa que contem tudo (com a redondeza): fora dela, custo zero sem procurar
   private double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
@@ -41,7 +45,7 @@ public final class CorridorIndex {
   }
 
   public boolean isEmpty() {
-    return build.isEmpty() && buildRegion.isEmpty() && gKeys == null && rKeys == null;
+    return build.isEmpty() && buildRegion.isEmpty() && buildZone.isEmpty() && gKeys == null && rKeys == null && zKeys == null;
   }
 
   /** acrescenta uma linha (eixo de uma pista) com o peso dado */
@@ -85,6 +89,38 @@ public final class CorridorIndex {
     }
   }
 
+  /**
+   * Zona urbana de risco (circulo): TODAS as vias dentro dela pagam o peso por metro, multiplicado
+   * pelo fator urban_zone_factor do perfil (rua local cheio, rodovia menos). Assim uma rodovia
+   * isolada ganha de uma rodovia que corta area urbana densa, que ganha das ruas de bairro.
+   */
+  public void addArea(double lat, double lon, double radiusM, double weight) {
+    addArea(lat, lon, radiusM, weight, true);
+  }
+
+  /**
+   * dense=true: zona urbana densa (todas as vias pagam, rodovia menos: urban_zone_factor).
+   * dense=false: regiao metropolitana (so as ruas pagam; rodovia/via expressa quase nada: risk_area_factor),
+   * faz a moto preferir sempre a via expressa dentro da metropole.
+   */
+  public void addArea(double lat, double lon, double radiusM, double weight, boolean dense) {
+    if (frozen) throw new IllegalStateException("indice ja montado");
+    if (weight <= 0) return;
+    double dLa = radiusM / 111320.0;
+    double dLo = dLa / Math.cos(Math.toRadians(lat));
+    grow(lat - dLa - REGION_CELL_DEG, lon - dLo - REGION_CELL_DEG);
+    grow(lat + dLa + REGION_CELL_DEG, lon + dLo + REGION_CELL_DEG);
+    double k = Math.cos(Math.toRadians(lat));
+    for (int a = rcell(lat - dLa); a <= rcell(lat + dLa); a++) {
+      for (int o = rcell(lon - dLo); o <= rcell(lon + dLo); o++) {
+        // centro da celula dentro do circulo
+        double cla = (a + 0.5) * REGION_CELL_DEG, clo = (o + 0.5) * REGION_CELL_DEG;
+        double dy = (cla - lat) * 111320, dx = (clo - lon) * 111320 * k;
+        if (dx * dx + dy * dy <= radiusM * radiusM) (dense ? buildZone : buildRegion).merge(key(a, o), weight, Math::max);
+      }
+    }
+  }
+
   private void grow(double lat, double lon) {
     minLat = Math.min(minLat, lat);
     maxLat = Math.max(maxLat, lat);
@@ -118,8 +154,19 @@ public final class CorridorIndex {
       rKeys[slot] = e.getKey();
       rVals[slot] = e.getValue();
     }
+    int zCap = tableSize(buildZone.size());
+    zKeys = new long[zCap];
+    Arrays.fill(zKeys, Long.MIN_VALUE);
+    zVals = new double[zCap];
+    zMask = zCap - 1;
+    for (java.util.Map.Entry<Long, Double> e : buildZone.entrySet()) {
+      int slot = slot(zKeys, zMask, e.getKey());
+      zKeys[slot] = e.getKey();
+      zVals[slot] = e.getValue();
+    }
     build.clear();
     buildRegion.clear();
+    buildZone.clear();
     frozen = true; // so depois de tudo pronto
   }
 
@@ -176,6 +223,22 @@ public final class CorridorIndex {
     while (rKeys[i] != Long.MIN_VALUE) {
       if (rKeys[i] == k) return rVals[i] * distM;
       i = (i + 1) & rMask;
+    }
+    return 0;
+  }
+
+  /** custo de zona urbana de risco (antes do fator urban_zone_factor, aplicado no OsmPath) */
+  public double zoneCost(int ilon1, int ilat1, int ilon2, int ilat2, double distM) {
+    if (distM <= 0) return 0;
+    if (!frozen) freeze();
+    if (zKeys == null || zKeys.length == 0) return 0;
+    double lat = (ilat1 + ilat2) / 2e6 - 90.0, lon = (ilon1 + ilon2) / 2e6 - 180.0;
+    if (outside(lat, lon)) return 0;
+    long k = key(rcell(lat), rcell(lon));
+    int i = (int) (mix(k) & zMask);
+    while (zKeys[i] != Long.MIN_VALUE) {
+      if (zKeys[i] == k) return zVals[i] * distM;
+      i = (i + 1) & zMask;
     }
     return 0;
   }

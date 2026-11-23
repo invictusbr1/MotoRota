@@ -323,6 +323,7 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Mode.entries.forEach { m -> ModeCard(vm, m, Modifier.weight(1f)) }
             }
+            vm.currentRoute?.note?.let { Text(it, color = Color(0xFFFFB74D), fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
             Spacer(Modifier.height(12.dp))
 
             val r = vm.currentRoute
@@ -371,6 +372,7 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = PanelBorder)
                 Spacer(Modifier.height(6.dp))
+                Text("${vm.mode.emoji} ${vm.mode.label}: ${vm.mode.hint}", color = TextDim, fontSize = 12.sp)
                 if (r.badPavingM > 500) {
                     Text("🧱 ${formatDistance(r.badPavingM.toDouble())} de paralelepípedo/bloquete", color = TextDim, fontSize = 13.sp)
                 }
@@ -469,6 +471,11 @@ private fun ModeCard(vm: AppViewModel, m: Mode, modifier: Modifier) {
             r != null -> {
                 Text(formatDistance(r.distanceM.toDouble()), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Text(formatDuration(r.timeS), color = TextDim, fontSize = 14.sp)
+                // quando o melhor caminho e o mesmo em dois modos, avisa (nao e defeito do botao)
+                val same = Mode.entries.firstOrNull { o ->
+                    o.ordinal < m.ordinal && vm.routes[o]?.let { it.distanceM == r.distanceM && it.timeS == r.timeS } == true
+                }
+                if (same != null) Text("= ${same.label}", color = TextDim, fontSize = 11.sp, maxLines = 1)
             }
             busy -> CircularProgressIndicator(Modifier.size(22.dp).padding(2.dp), strokeWidth = 2.dp, color = m.color())
             vm.routeErrors[m] != null -> Text("sem rota", color = Danger, fontSize = 14.sp)

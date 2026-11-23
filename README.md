@@ -26,10 +26,11 @@ E mais:
 - 🌧️ **Chuva e pôr do sol no caminho**: ao traçar a rota, mostra se há chuva prevista nos pontos do trajeto, na hora em que você vai passar ([Open-Meteo](https://open-meteo.com), grátis), e se vai pegar noite.
 - 🚦 **Trânsito ao vivo** ([TomTom](https://developer.tomtom.com)): desvia de vias interditadas e avisa acidentes, obras, alagamentos e trânsito parado.
 - 🚨 **Áreas de risco conhecidas** ([app/src/main/assets/areas_risco.csv](app/src/main/assets/areas_risco.csv)): 32 áreas para evitar no Grande Rio (tiroteios frequentes, segundo o Instituto Fogo Cruzado) e 10 de atenção (roubos de moto em SP, homicídios em Porto Alegre). A rota desvia das ruas internas, mas continua usando as vias expressas da borda (Linha Vermelha, Av. Brasil), e a voz avisa "evite parar" ao passar ao lado. Dá para desligar em ⚙️.
-- 🛣️ **Rodovias com muitos assaltos** ([app/src/main/assets/trechos_risco.json](app/src/main/assets/trechos_risco.json)): Washington Luís (BR-040), Rio–Magé (BR-116), Arco Metropolitano (BR-493), Linha Amarela, Avenida Brasil e Rodoanel Mário Covas. Cada trecho tem dois pesos:
-  - **na própria rodovia**: forte no Rodoanel (a rota contorna pela cidade, ex.: Marginais), leve nas que não têm alternativa (a rota passa, mas avisa por voz "evite parar");
-  - **na redondeza (~1,5 km)**: as ruas locais em volta ficam "caras", para o app nunca trocar a rodovia pelos bairros vizinhos.
-  À noite (19h–6h) e no fim de semana os pesos aumentam. O motor BRouter foi adaptado para isso (`CorridorIndex`).
+- 🧭 **Rota mais segura de verdade** (regra dos motociclistas: *rodovia que passa por fora > rodovia dentro da cidade > rua de bairro*):
+  - **Zonas urbanas** ([app/src/main/assets/zonas_risco.csv](app/src/main/assets/zonas_risco.csv)): dentro do Grande Rio e de Grande SP a rota prefere as vias expressas às ruas; nas áreas densas (Baixada, Zona Norte, São Gonçalo, centro de SP) todas as vias pagam, a rodovia menos. Ex.: saindo de Caxias para SP, vai pela Washington Luís → Arco → Dutra em vez de cortar a Baixada; contorna São Paulo por fora.
+  - **Rodovias com muitos assaltos** ([app/src/main/assets/trechos_risco.json](app/src/main/assets/trechos_risco.json)): Washington Luís, Rio–Magé, Arco, Linha Amarela, Av. Brasil e Rodoanel ficam **só com aviso por voz** ("evite parar") e as ruas locais em volta ficam caras (o app nunca troca a rodovia pelos bairros vizinhos).
+  - **Os 3 modos são diferentes**: ⚡ Rápida = menor tempo (só avisa); 🏍️ Desempenho = rodovia por fora; 🛡️ Segura = idem, mais forte. Quando dois modos dão o mesmo caminho, o cartão mostra "= Desempenho".
+  - À noite e no fim de semana o app foge mais das áreas urbanas. O motor BRouter foi adaptado (`CorridorIndex`).
 
 ## Como instalar no celular
 
