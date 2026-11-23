@@ -21,6 +21,11 @@ E mais:
 - 🗺️ **Mapa limpo**, só com as estradas em destaque, nos temas **dia** e **noite**, e com **🛰️ satélite** (imagens Sentinel-2 da EOX).
 - ✏️ **Editar caminho**: toque no mapa em todos os lugares por onde quer passar. Cada ponto entra sozinho na ordem certa. Toque num ponto para mover ou remover, e use **Desfazer**.
 - ⭐ **Passeios**: reordene as paradas (⬆⬇), faça **ida e volta** e salve o roteiro para usar depois.
+- 🏍️ **Cockpit de moto**: velocímetro em anel (laranja perto do limite, vermelho acima), computador de bordo (km da viagem, média) e **resumo ao chegar** (distância, tempo, média e máxima).
+- ⛽ **Autonomia do tanque**: informe quantos km a moto faz por tanque (⚙️) e toque em "Abasteci". O app conta os km, avisa por voz quando estiver acabando e diz se a rota vai precisar de parada para abastecer.
+- 🌧️ **Chuva e pôr do sol no caminho**: ao traçar a rota, mostra se há chuva prevista nos pontos do trajeto, na hora em que você vai passar ([Open-Meteo](https://open-meteo.com), grátis), e se vai pegar noite.
+- 🚦 **Trânsito ao vivo** ([TomTom](https://developer.tomtom.com)): desvia de vias interditadas e avisa acidentes, obras, alagamentos e trânsito parado.
+- 🚨 **Áreas de risco conhecidas** ([app/src/main/assets/areas_risco.csv](app/src/main/assets/areas_risco.csv)): 32 áreas para evitar no Grande Rio (tiroteios frequentes, segundo o Instituto Fogo Cruzado) e 10 de atenção (roubos de moto em SP, homicídios em Porto Alegre). A rota desvia das ruas internas, mas continua usando as vias expressas da borda (Linha Vermelha, Av. Brasil), e a voz avisa "evite parar" ao passar ao lado. Dá para desligar em ⚙️.
 
 ## Como instalar no celular
 
@@ -66,8 +71,7 @@ As atualizações instalam por cima da versão anterior. Os mapas e as áreas de
 ## Próximos passos
 
 - Avisos e áreas de risco compartilhados entre a família (hoje ficam só no celular de quem marcou).
-- Interdições e obras em tempo real (TomTom, com chave gratuita).
 - Satélite em alta resolução (Esri, com chave gratuita).
-- Dados públicos de violência (ex.: Fogo Cruzado no Rio).
-- Postos de combustível ao longo da rota e aviso de autonomia do tanque.
+- Postos de combustível ao longo da rota.
+- Mais áreas de risco (Sul, Nordeste) e atualização automática pelo Fogo Cruzado.
 - Mapa visual 100% offline.

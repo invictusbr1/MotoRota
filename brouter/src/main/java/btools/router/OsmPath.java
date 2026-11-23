@@ -140,6 +140,9 @@ abstract class OsmPath implements OsmLinkHolder {
 
     // evaluate the way tags
     rc.expctxWay.evaluate(rc.inverseDirection ^ isReverse, description);
+    // MotoRota: o perfil diz quanto das "areas de risco com peso" vale nesta via
+    // (ex.: quase nada em rodovia/via expressa que so passa pela borda, cheio nas ruas internas)
+    float riskFactor = rc.expctxWay.getVariableValue("risk_area_factor", 1f);
 
     // and check if is useful
     if (rc.ai != null && rc.ai.polygon.isWithin(lon1, lat1)) {
@@ -340,7 +343,7 @@ abstract class OsmPath implements OsmLinkHolder {
         if (rc.nogoCost < 0) {
           cost = -1;
         } else {
-          cost += rc.nogoCost;
+          cost += rc.nogoCost * riskFactor;
         }
         return;
       }
@@ -372,7 +375,7 @@ abstract class OsmPath implements OsmLinkHolder {
       cost = -1;
       return;
     } else {
-      cost += rc.nogoCost;
+      cost += rc.nogoCost * riskFactor;
     }
 
     // add target-node costs

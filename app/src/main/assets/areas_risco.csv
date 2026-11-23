@@ -1,0 +1,49 @@
+# Areas de risco que vem com o MotoRota.
+# nivel: E = evitar (rota desvia das ruas internas), A = atencao (so avisa por voz)
+# Coordenadas do OpenStreetMap; raio aproximado pelo tamanho da area.
+# Fontes: Instituto Fogo Cruzado (tiroteios, Grande Rio, 2024-2025), SSP-SP / FECAP / Metropoles
+# (roubos de moto em SP, 2025), SSP-RS e SESP-PR via crimebrasil.com.br (homicidios por bairro, 2025-2026).
+# Cada um pode desligar em Ajustes (engrenagem) -> Areas de risco conhecidas.
+nivel;lat;lon;raio;nome;cidade;motivo
+E;-22.8460;-43.2425;650;Complexo da Maré (norte);Rio de Janeiro;tiroteios frequentes
+E;-22.8590;-43.2420;650;Complexo da Maré (centro);Rio de Janeiro;tiroteios frequentes
+E;-22.8715;-43.2420;600;Complexo da Maré (sul);Rio de Janeiro;tiroteios frequentes
+E;-22.8606;-43.2738;1200;Complexo do Alemão;Rio de Janeiro;tiroteios frequentes
+E;-22.8494;-43.2814;600;Vila Cruzeiro (Complexo da Penha);Rio de Janeiro;tiroteios frequentes
+E;-22.8873;-43.2585;650;Jacarezinho;Rio de Janeiro;tiroteios frequentes
+E;-22.8800;-43.2457;800;Manguinhos;Rio de Janeiro;tiroteios frequentes
+E;-22.9480;-43.3629;900;Cidade de Deus;Rio de Janeiro;tiroteios frequentes
+E;-22.9885;-43.2482;800;Rocinha;Rio de Janeiro;tiroteios frequentes
+E;-22.9140;-43.2843;900;Complexo do Lins;Rio de Janeiro;tiroteios frequentes
+E;-22.9119;-43.2534;500;Morro dos Macacos (Vila Isabel);Rio de Janeiro;tiroteios frequentes
+E;-22.8908;-43.3334;350;Morro do Fubá (Cascadura);Rio de Janeiro;tiroteios frequentes
+E;-22.8602;-43.3099;600;Morro do Juramento (Vicente de Carvalho);Rio de Janeiro;tiroteios frequentes
+E;-22.8648;-43.3283;350;Serrinha (Madureira);Rio de Janeiro;tiroteios frequentes
+E;-22.8023;-43.1854;450;Morro do Dendê (Ilha do Governador);Rio de Janeiro;tiroteios frequentes
+E;-22.8213;-43.3749;700;Complexo do Chapadão;Rio de Janeiro;tiroteios frequentes
+E;-22.8167;-43.3012;600;Parada de Lucas;Rio de Janeiro;tiroteios frequentes
+E;-22.8019;-43.3165;700;Vigário Geral;Rio de Janeiro;tiroteios frequentes
+E;-22.8772;-43.4920;550;Complexo da Coreia (Senador Camará);Rio de Janeiro;tiroteios frequentes
+E;-22.9375;-43.2548;550;Morro do Borel;Rio de Janeiro;tiroteios frequentes
+E;-22.9180;-43.2036;450;Complexo do São Carlos;Rio de Janeiro;tiroteios frequentes
+E;-22.9761;-43.3344;850;Rio das Pedras;Rio de Janeiro;tiroteios frequentes
+E;-22.9885;-43.3205;350;Muzema;Rio de Janeiro;tiroteios frequentes
+E;-22.9860;-43.2940;400;Morro do Banco (Itanhangá);Rio de Janeiro;tiroteios frequentes
+E;-22.8166;-43.2943;500;Cidade Alta (Cordovil);Rio de Janeiro;tiroteios frequentes
+E;-22.8557;-43.4900;700;Vila Kennedy;Rio de Janeiro;tiroteios frequentes
+E;-22.9250;-43.2175;450;Morro do Turano;Rio de Janeiro;tiroteios frequentes
+E;-22.9006;-43.1961;350;Morro da Providência;Rio de Janeiro;tiroteios frequentes
+E;-22.9583;-43.3512;600;Gardênia Azul;Rio de Janeiro;tiroteios frequentes
+E;-22.8215;-43.3620;550;Complexo da Pedreira (Costa Barros);Rio de Janeiro;tiroteios frequentes
+E;-22.7816;-43.0222;900;Complexo do Salgueiro (São Gonçalo);São Gonçalo;tiroteios frequentes
+E;-22.8990;-43.1197;300;Morro do Estado (Niterói);Niterói;tiroteios frequentes
+A;-22.7934;-42.9978;1500;Jardim Catarina (São Gonçalo);São Gonçalo;região com tiroteios frequentes
+A;-23.6720;-46.7420;1500;Estrada do M'Boi Mirim (Jardim São Luís);São Paulo;trecho campeão de roubo de motos
+A;-23.6950;-46.7600;1500;Estrada do M'Boi Mirim (Jardim Ângela);São Paulo;trecho campeão de roubo de motos
+A;-23.6977;-46.6483;1200;Estrada do Alvarenga (Pedreira);São Paulo;trecho campeão de roubo de motos
+A;-23.7164;-46.6288;1200;Estrada do Alvarenga (sul);São Paulo;trecho campeão de roubo de motos
+A;-23.5352;-46.6410;500;Cracolândia (Luz / Campos Elíseos);São Paulo;região com muitos assaltos
+A;-23.6153;-46.7258;900;Paraisópolis;São Paulo;região com muitos assaltos
+A;-23.6040;-46.5900;800;Heliópolis;São Paulo;região com muitos assaltos
+A;-30.0136;-51.0964;1200;Rubem Berta;Porto Alegre;bairro com alta taxa de homicídios
+A;-30.0177;-51.1251;1000;Passo das Pedras;Porto Alegre;bairro com alta taxa de homicídios

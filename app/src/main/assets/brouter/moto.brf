@@ -205,6 +205,14 @@ assign costfactor =
   add road_penalty
       town_penalty
 
+# Areas de risco conhecidas (com peso): quanto da penalidade vale em cada tipo de via.
+# Rodovia/via expressa que so passa pela borda (Linha Vermelha, Av. Brasil) quase nao paga;
+# as ruas internas pagam tudo, entao a rota nao "corta caminho" por dentro.
+assign risk_area_factor =
+    switch highway=motorway|motorway_link|trunk|trunk_link  0.03
+    switch highway=primary|primary_link  0.4
+    1
+
 assign minspeed =
     switch highway=motorway|trunk  70 0
 

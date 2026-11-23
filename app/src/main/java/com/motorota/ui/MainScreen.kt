@@ -90,6 +90,9 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
     var showSaveTrip by remember { mutableStateOf(false) }
     var reportAt by remember { mutableStateOf<GeoPoint?>(null) }
     var pickedStop by remember { mutableStateOf<Int?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
     // atualiza o progresso dos downloads de mapa
     LaunchedEffect(Unit) {
@@ -126,6 +129,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
                 onOpenDownloads = { showDownloads = true },
                 onOpenTrips = { showTrips = true },
                 onSaveTrip = { showSaveTrip = true },
+                onOpenSettings = { showSettings = true },
             )
         }
 
@@ -151,6 +155,13 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
         StopActionDialog(vm, i, onDismiss = { pickedStop = null })
     }
     if (showTrips) TripsDialog(vm, onDismiss = { showTrips = false })
+    if (showSettings) SettingsDialog(vm, onDismiss = {
+        showSettings = false
+        // nao deixa o teclado reabrir na busca depois de digitar a autonomia
+        focusManager.clearFocus(force = true)
+        keyboard?.hide()
+    })
+    vm.tripSummary?.let { TripSummaryDialog(it, onDismiss = { vm.tripSummary = null }) }
     if (showSaveTrip) SaveTripDialog(vm, onDismiss = { showSaveTrip = false })
     if (showDownloads) {
         DownloadDialog(vm, onDismiss = { showDownloads = false })
@@ -167,6 +178,7 @@ private fun PlanningOverlay(
     onOpenDownloads: () -> Unit,
     onOpenTrips: () -> Unit,
     onSaveTrip: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val focus = LocalFocusManager.current
     var query by remember { mutableStateOf("") }
@@ -279,6 +291,7 @@ private fun PlanningOverlay(
             RoundButton(onClick = onOpenTrips) { Text("⭐", fontSize = 22.sp) }
             RoundButton(onClick = { vm.night = !vm.night }) { Text(if (vm.night) "☀️" else "🌙", fontSize = 22.sp) }
             RoundButton(onClick = { vm.toggleSatellite() }, highlight = vm.satellite) { Text("🛰️", fontSize = 22.sp) }
+            RoundButton(onClick = onOpenSettings) { Text("⚙️", fontSize = 22.sp) }
             RoundButton(onClick = { vm.centerOnMe() }) { Icon(Icons.Default.MyLocation, "Minha posição", tint = Color.White) }
         }
 
@@ -322,35 +335,6 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                         Stat("🟫", if (r.unpavedM < 100) "sem terra" else "${formatDistance(r.unpavedM.toDouble())} terra")
                         Stat("🕐", "chega $eta")
                     }
-                    if (r.badPavingM > 500) {
-                        Text("🧱 ${formatDistance(r.badPavingM.toDouble())} de paralelepípedo/bloquete", color = TextDim, fontSize = 13.sp)
-                    }
-                    val alerts = remember(r, vm.hazards, vm.liveIncidents) { vm.alertsOn(r) }
-                    val nRadar = alerts.count { it.isRadar }
-                    val nOther = alerts.size - nRadar
-                    if (alerts.isNotEmpty()) {
-                        Text(
-                            listOfNotNull(
-                                if (nRadar > 0) "📷 $nRadar radar(es)" else null,
-                                if (nOther > 0) "⚠️ $nOther alerta(s)" else null,
-                            ).joinToString("  ·  ") + " no caminho",
-                            color = TextDim, fontSize = 13.sp,
-                        )
-                    }
-                    if (vm.risks.isNotEmpty()) {
-                        Text("⚠️ Desviando de ${vm.risks.size} área(s) de risco", color = TextDim, fontSize = 13.sp)
-                    }
-                    // transito de agora (TomTom)
-                    vm.trafficStatus?.let { Text(it, color = TextDim, fontSize = 13.sp) }
-                    vm.liveIncidents.take(4).forEach { inc ->
-                        Text(
-                            "${inc.emoji} ${inc.title}" + if (inc.where.isNotBlank()) " · ${inc.where}" else "",
-                            color = Color(0xFFFFB74D), fontSize = 13.sp, maxLines = 1,
-                        )
-                    }
-                    if (vm.liveIncidents.size > 4) {
-                        Text("… e mais ${vm.liveIncidents.size - 4}", color = TextDim, fontSize = 13.sp)
-                    }
                 }
                 err != null -> Text(err, color = Danger, fontSize = 15.sp)
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -382,6 +366,55 @@ private fun RoutePanel(vm: AppViewModel, onSaveTrip: () -> Unit) {
                 OutlinedButton(onClick = onSaveTrip, modifier = Modifier.height(44.dp)) { Text("💾 Salvar passeio") }
             }
             vm.destination?.let { WaypointLine("🔴", it.name, onRemove = null) }
+            // informacoes da estrada (ficam embaixo dos botoes; o painel rola)
+            vm.currentRoute?.let { r ->
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = PanelBorder)
+                Spacer(Modifier.height(6.dp))
+                if (r.badPavingM > 500) {
+                    Text("🧱 ${formatDistance(r.badPavingM.toDouble())} de paralelepípedo/bloquete", color = TextDim, fontSize = 13.sp)
+                }
+                val alerts = remember(r, vm.hazards, vm.liveIncidents) { vm.alertsOn(r) }
+                val nRadar = alerts.count { it.isRadar }
+                val nOther = alerts.size - nRadar
+                if (alerts.isNotEmpty()) {
+                    Text(
+                        listOfNotNull(
+                            if (nRadar > 0) "📷 $nRadar radar(es)" else null,
+                            if (nOther > 0) "⚠️ $nOther alerta(s)" else null,
+                        ).joinToString("  ·  ") + " no caminho",
+                        color = TextDim, fontSize = 13.sp,
+                    )
+                }
+                if (vm.risks.isNotEmpty()) {
+                    Text("⚠️ Desviando de ${vm.risks.size} área(s) de risco", color = TextDim, fontSize = 13.sp)
+                }
+                // areas de risco conhecidas pelas quais a rota passa ao lado (via expressa)
+                val nKnown = alerts.count { it.key.startsWith("kr-") }
+                if (nKnown > 0) {
+                    Text("🚨 Passa ao lado de $nKnown área(s) de risco: aviso por voz, evite parar", color = Color(0xFFFF8A80), fontSize = 13.sp)
+                }
+                // combustivel
+                vm.fuelLeftKm?.let { left ->
+                    if (r.distanceM / 1000 > left) {
+                        Text("⛽ Autonomia ~$left km: vai precisar abastecer no caminho", color = Color(0xFFFFB74D), fontSize = 13.sp)
+                    }
+                }
+                // clima e por do sol
+                vm.routeWeather?.rainText?.let { Text(it, color = if (it.startsWith("🌧")) Color(0xFF90CAF9) else TextDim, fontSize = 13.sp) }
+                vm.routeWeather?.sunsetText?.let { Text(it, color = Color(0xFFFFCC80), fontSize = 13.sp) }
+                // transito de agora (TomTom)
+                vm.trafficStatus?.let { Text(it, color = TextDim, fontSize = 13.sp) }
+                vm.liveIncidents.take(4).forEach { inc ->
+                    Text(
+                        "${inc.emoji} ${inc.title}" + if (inc.where.isNotBlank()) " · ${inc.where}" else "",
+                        color = Color(0xFFFFB74D), fontSize = 13.sp, maxLines = 1,
+                    )
+                }
+                if (vm.liveIncidents.size > 4) {
+                    Text("… e mais ${vm.liveIncidents.size - 4}", color = TextDim, fontSize = 13.sp)
+                }
+            }
           }
 
             Spacer(Modifier.height(12.dp))
@@ -504,46 +537,60 @@ private fun NavigationOverlay(vm: AppViewModel, onReport: () -> Unit) {
 
         Spacer(Modifier.weight(1f))
 
-        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-            // placa de limite da via
-            val limit = vm.currentLimit ?: vm.nextAlert?.takeIf { it.first.isRadar && it.second < 400 }?.first?.limitKmh?.takeIf { it > 0 }
-            if (limit != null) {
-                Box(
-                    Modifier.size(72.dp).clip(CircleShape).background(Color.White).border(7.dp, Danger, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) { Text("$limit", fontSize = 26.sp, fontWeight = FontWeight.Black, color = Color.Black) }
-            } else Spacer(Modifier.size(72.dp))
-            // botao de avisar (tipo Waze)
+        // botao de avisar (tipo Waze), em cima do painel, do lado direito
+        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.End) {
             Box(
-                Modifier.size(72.dp).clip(CircleShape).background(Panel).border(2.dp, PanelBorder, CircleShape).clickable(onClick = onReport),
+                Modifier.size(68.dp).clip(CircleShape).background(Panel).border(2.dp, PanelBorder, CircleShape).clickable(onClick = onReport),
                 contentAlignment = Alignment.Center,
-            ) { Text("⚠️", fontSize = 32.sp) }
+            ) { Text("⚠️", fontSize = 30.sp) }
         }
 
-        Surface(color = Panel, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                val over = vm.currentLimit?.let { vm.speedKmh > it + 5 } == true
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(92.dp)) {
-                    Text("${vm.speedKmh}", fontSize = 40.sp, fontWeight = FontWeight.Black, color = if (over) Danger else Color.White, maxLines = 1, softWrap = false)
-                    Text("km/h", fontSize = 13.sp, color = TextDim)
+        // ---- painel tipo cockpit de moto ----
+        Surface(color = Panel, shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(start = 6.dp, end = 12.dp, top = 8.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                // velocimetro com a placa do limite encostada
+                val limit = vm.currentLimit ?: vm.nextAlert?.takeIf { it.first.isRadar && it.second < 400 }?.first?.limitKmh?.takeIf { it > 0 }
+                Box {
+                    SpeedGauge(vm.speedKmh, limit)
+                    if (limit != null) {
+                        Box(
+                            Modifier.align(Alignment.TopEnd).size(44.dp).clip(CircleShape).background(Color.White).border(5.dp, Danger, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("$limit", fontSize = 16.sp, fontWeight = FontWeight.Black, color = Color.Black) }
+                    }
                 }
+                Spacer(Modifier.width(6.dp))
                 Column(Modifier.weight(1f)) {
                     if (st != null) {
                         val eta = LocalTime.now().plusSeconds(st.remainingS.toLong()).format(DateTimeFormatter.ofPattern("HH:mm"))
-                        Text(eta, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        Text("${formatDistance(st.remainingM)} · ${formatDuration(st.remainingS)}", fontSize = 15.sp, color = TextDim)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(eta, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Spacer(Modifier.width(6.dp))
+                            Text("chegada", fontSize = 12.sp, color = TextDim, modifier = Modifier.padding(bottom = 5.dp))
+                        }
+                        Text("${formatDistance(st.remainingM)} · ${formatDuration(st.remainingS)}", fontSize = 15.sp, color = TextDim, maxLines = 1)
                     }
                     if (vm.stops.isNotEmpty()) Text("Próxima parada: ${vm.stops.first().name}", fontSize = 13.sp, color = Amber, maxLines = 1)
+                    Spacer(Modifier.height(6.dp))
+                    // computador de bordo
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CockpitChip("🛣️", formatDistance(vm.tripDistM))
+                        if (vm.tripAvgKmh > 0) CockpitChip("📊", "${vm.tripAvgKmh}")
+                        vm.fuelLeftKm?.let { left ->
+                            CockpitChip("⛽", "${left.coerceAtLeast(0)} km", highlight = if (left <= 60) Color(0xFF8D4A00) else null)
+                        }
+                    }
                 }
-                RoundButton(onClick = { vm.toggleVoice() }) {
-                    Icon(if (vm.voiceOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff, "Voz", tint = Color.White)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RoundButton(onClick = { vm.toggleVoice() }) {
+                        Icon(if (vm.voiceOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff, "Voz", tint = Color.White)
+                    }
+                    FilledTonalButton(
+                        onClick = { vm.stopNavigation() },
+                        modifier = Modifier.height(52.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(containerColor = Danger, contentColor = Color.White),
+                    ) { Text("Sair", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
                 }
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(
-                    onClick = { vm.stopNavigation() },
-                    modifier = Modifier.height(58.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = Danger, contentColor = Color.White),
-                ) { Text("Sair", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }

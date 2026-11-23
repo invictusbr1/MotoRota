@@ -27,6 +27,7 @@ object RouteAlerts {
         radars: RadarStore,
         hazards: List<Hazard>,
         live: List<com.motorota.data.LiveIncident> = emptyList(),
+        known: List<com.motorota.data.KnownRisk> = emptyList(),
     ): List<AlongAlert> {
         val pts = route.points
         if (pts.size < 2) return emptyList()
@@ -84,7 +85,34 @@ object RouteAlerts {
                 )
             )
         }
+        // areas de risco conhecidas que a rota atravessa (ex.: via expressa ao lado de uma comunidade)
+        for (k in known) {
+            val posM = firstInside(route, k.point, k.radiusM.toDouble()) ?: continue
+            val curto = k.name.substringBefore(" (")
+            out.add(
+                AlongAlert(
+                    key = "kr-${k.name}",
+                    // avisa um pouco antes de entrar no circulo
+                    posM = (posM - 150).coerceAtLeast(0.0),
+                    emoji = if (k.avoid) "🚨" else "⚠️",
+                    title = (if (k.avoid) "Área de risco · " else "Atenção · ") + curto,
+                    speech = if (k.avoid) "área de risco à frente, $curto. Evite parar." else "atenção, ${k.reason}. Evite parar.",
+                )
+            )
+        }
         return out.sortedBy { it.posM }
+    }
+
+    /** metros desde o inicio da rota ate o primeiro ponto dentro do circulo (null se nao entra) */
+    fun firstInside(route: RouteResult, c: GeoPoint, radiusM: Double): Double? {
+        val pts = route.points
+        val dLat = radiusM / 111_000.0 + 0.001
+        for (i in pts.indices) {
+            val p = pts[i]
+            if (kotlin.math.abs(p.lat - c.lat) > dLat) continue
+            if (p.distanceTo(c) <= radiusM) return route.cumDist[i]
+        }
+        return null
     }
 
     private class Hit(val posM: Double, val bearing: Double)

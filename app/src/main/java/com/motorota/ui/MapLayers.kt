@@ -28,6 +28,7 @@ object MapLayers {
 
     private const val SRC_ROUTES = "mr-routes"
     private const val SRC_RISKS = "mr-risks"
+    private const val SRC_KNOWN = "mr-known"
     private const val SRC_WPS = "mr-wps"
     private const val SRC_RADARS = "mr-radars"
     private const val SRC_HAZARDS = "mr-hazards"
@@ -147,6 +148,7 @@ object MapLayers {
 
     fun setup(style: Style) {
         style.addSource(GeoJsonSource(SRC_RISKS))
+        style.addSource(GeoJsonSource(SRC_KNOWN))
         style.addSource(GeoJsonSource(SRC_ROUTES))
         style.addSource(GeoJsonSource(SRC_WPS))
         style.addSource(GeoJsonSource(SRC_RADARS))
@@ -181,6 +183,32 @@ object MapLayers {
                 PropertyFactory.lineColor("#E53935"),
                 PropertyFactory.lineWidth(2f),
             )
+        )
+        // areas de risco conhecidas (vem com o app): vermelho escuro = evitar, laranja = atencao
+        below(
+            FillLayer("mr-known-fill", SRC_KNOWN).withProperties(
+                PropertyFactory.fillColor(Expression.get("cor")),
+                PropertyFactory.fillOpacity(0.16f),
+            )
+        )
+        below(
+            LineLayer("mr-known-line", SRC_KNOWN).withProperties(
+                PropertyFactory.lineColor(Expression.get("cor")),
+                PropertyFactory.lineWidth(1.5f),
+                PropertyFactory.lineDasharray(arrayOf(3f, 2f)),
+                PropertyFactory.lineOpacity(0.8f),
+            )
+        )
+        style.addLayer(
+            SymbolLayer("mr-known-label", SRC_KNOWN).withProperties(
+                PropertyFactory.textField(Expression.get("nome")),
+                PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+                PropertyFactory.textSize(12f),
+                PropertyFactory.textColor(Expression.get("cor")),
+                PropertyFactory.textHaloColor("#FFFFFF"),
+                PropertyFactory.textHaloWidth(1.5f),
+                PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_POINT),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point"))).apply { minZoom = 12.5f }
         )
 
         style.addImage("mr-arrow", arrowBitmap())
@@ -322,6 +350,20 @@ object MapLayers {
     fun updateRisks(style: Style, risks: List<RiskArea>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_RISKS) ?: return
         src.setGeoJson(FeatureCollection.fromFeatures(risks.map { Feature.fromGeometry(circle(it.point, it.radiusM.toDouble())) }))
+    }
+
+    fun updateKnownRisks(style: Style, list: List<com.motorota.data.KnownRisk>) {
+        val src = style.getSourceAs<GeoJsonSource>(SRC_KNOWN) ?: return
+        val feats = ArrayList<Feature>()
+        for (k in list) {
+            val cor = if (k.avoid) "#C62828" else "#EF6C00"
+            feats.add(Feature.fromGeometry(circle(k.point, k.radiusM.toDouble())).apply { addStringProperty("cor", cor) })
+            feats.add(Feature.fromGeometry(Point.fromLngLat(k.point.lon, k.point.lat)).apply {
+                addStringProperty("cor", cor)
+                addStringProperty("nome", (if (k.avoid) "Risco: " else "Atenção: ") + k.name.substringBefore(" ("))
+            })
+        }
+        src.setGeoJson(FeatureCollection.fromFeatures(feats))
     }
 
     fun updateWaypoints(style: Style, origin: Waypoint?, stops: List<Waypoint>, dest: Waypoint?) {

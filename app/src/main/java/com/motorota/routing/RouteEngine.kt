@@ -42,12 +42,22 @@ class RouteEngine(private val ctx: Context) {
 
     fun hasAnyMap(): Boolean = segmentDir.listFiles()?.any { it.name.endsWith(".rd5") } == true
 
-    suspend fun route(points: List<GeoPoint>, mode: Mode, risks: List<RiskArea>): RouteResult =
+    suspend fun route(
+        points: List<GeoPoint>,
+        mode: Mode,
+        risks: List<RiskArea>,
+        known: List<com.motorota.data.KnownRisk> = emptyList(),
+    ): RouteResult =
         lock.withLock {
-            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks) }
+            withContext(Dispatchers.Default) { routeBlocking(points, mode, risks, known) }
         }
 
-    private fun routeBlocking(points: List<GeoPoint>, mode: Mode, risks: List<RiskArea>): RouteResult {
+    private fun routeBlocking(
+        points: List<GeoPoint>,
+        mode: Mode,
+        risks: List<RiskArea>,
+        known: List<com.motorota.data.KnownRisk>,
+    ): RouteResult {
         require(points.size >= 2)
         val collector = RoutingParamCollector()
         val lonlats = points.joinToString("|") { "${it.lon},${it.lat}" }
@@ -60,13 +70,28 @@ class RouteEngine(private val ctx: Context) {
 
         val params = HashMap<String, String>()
         params["profile:modo"] = mode.code.toString()
+        val nogos = ArrayList<String>()
         if (risks.isNotEmpty()) {
-            // No modo Segura a margem em volta de cada area e 50% maior.
+            // areas marcadas por voces: bloqueio total. No modo Segura a margem e 50% maior.
             val factor = if (mode == Mode.SEGURA) 1.5 else 1.0
-            params["nogos"] = risks.joinToString("|") {
-                "${it.point.lon},${it.point.lat},${(it.radiusM * factor).toInt()}"
+            for (rk in risks) {
+                val r = (rk.radiusM * factor).toInt()
+                // se a partida, uma parada ou o destino estiver DENTRO da area, bloqueio total deixaria
+                // a moto "presa" (sem rota para sair/chegar): nesse caso vira area com peso alto.
+                val trapped = points.any { it.distanceTo(rk.point) <= r + 30 }
+                nogos.add("${rk.point.lon},${rk.point.lat},$r" + if (trapped) ",30" else "")
             }
         }
+        // areas conhecidas (vem com o app): penalidade por metro rodado DENTRO da area.
+        // O perfil (risk_area_factor) faz rodovia/via expressa da borda pagar quase nada,
+        // e as ruas internas pagarem tudo. Assim ainda da para chegar se o destino for la dentro.
+        val weight = when (mode) {
+            Mode.SEGURA -> 20
+            Mode.DESEMPENHO -> 10
+            Mode.RAPIDA -> 5
+        }
+        known.filter { it.avoid }.mapTo(nogos) { "${it.point.lon},${it.point.lat},${it.radiusM},$weight" }
+        if (nogos.isNotEmpty()) params["nogos"] = nogos.joinToString("|")
         collector.setParams(rc, wpList, params)
 
         val t0 = System.currentTimeMillis()
