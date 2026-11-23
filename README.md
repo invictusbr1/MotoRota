@@ -21,6 +21,8 @@ E mais:
 - 🗺️ **Mapa limpo**, só com as estradas em destaque, nos temas **dia** e **noite**, e com **🛰️ satélite** (imagens Sentinel-2 da EOX).
 - ✏️ **Editar caminho**: toque no mapa em todos os lugares por onde quer passar. Cada ponto entra sozinho na ordem certa. Toque num ponto para mover ou remover, e use **Desfazer**.
 - ⭐ **Passeios**: reordene as paradas (⬆⬇), faça **ida e volta** e salve o roteiro para usar depois.
+- 🧭 **Navegação estilo Waze**: faixa escura com a manobra e "em seguida", placa do **limite da via** sempre no mesmo canto ("--" quando a via não informa), botão **Re-centralizar** quando você arrasta o mapa e **Geral** para ver a rota toda.
+- ☰ **Menu configurável**: todas as funções num menu; toque no 📌 para deixar a função como botão na tela (mapa e navegação têm botões separados).
 - 🏍️ **Cockpit de moto**: velocímetro em anel (laranja perto do limite, vermelho acima), computador de bordo (km da viagem, média) e **resumo ao chegar** (distância, tempo, média e máxima).
 - ⛽ **Autonomia do tanque**: informe quantos km a moto faz por tanque (⚙️) e toque em "Abasteci". O app conta os km, avisa por voz quando estiver acabando e diz se a rota vai precisar de parada para abastecer.
 - 🌧️ **Chuva e pôr do sol no caminho**: ao traçar a rota, mostra se há chuva prevista nos pontos do trajeto, na hora em que você vai passar ([Open-Meteo](https://open-meteo.com), grátis), e se vai pegar noite.

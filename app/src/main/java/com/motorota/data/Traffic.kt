@@ -32,6 +32,9 @@ data class LiveIncident(
 object Traffic {
     val enabled get() = BuildConfig.TOMTOM_KEY.isNotBlank()
 
+    /** a ultima consulta deixou algum pedaco da rota sem resposta? */
+    @Volatile var partial = false; private set
+
     private const val FIELDS =
         "{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description},from,to,roadNumbers}}}"
 
@@ -39,8 +42,28 @@ object Traffic {
     suspend fun along(route: RouteResult): List<LiveIncident> = withContext(Dispatchers.IO) {
         if (!enabled || route.points.size < 2) return@withContext emptyList()
         val found = LinkedHashMap<String, LiveIncident>()
-        for (box in boxes(route.points)) {
-            val json = fetch(box)
+        val boxes = boxes(route.points)
+        var ok = 0
+        var lastError: Exception? = null
+        for (box in boxes) {
+            // cada pedaco tenta 2 vezes; se um falhar, os outros continuam valendo
+            val json = try {
+                fetch(box)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                try {
+                    kotlinx.coroutines.delay(1500)
+                    fetch(box)
+                } catch (e2: kotlinx.coroutines.CancellationException) {
+                    throw e2
+                } catch (e2: Exception) {
+                    lastError = e2
+                    android.util.Log.w("MotoRota", "TomTom pedaco falhou: $e2")
+                    continue
+                }
+            }
+            ok++
             val arr = JSONObject(json).optJSONArray("incidents") ?: continue
             for (i in 0 until arr.length()) {
                 val inc = parse(arr.getJSONObject(i)) ?: continue
@@ -48,6 +71,8 @@ object Traffic {
                 if (distToRoute(route.points, inc.point) <= 20.0) found[inc.id] = inc
             }
         }
+        if (ok == 0 && lastError != null) throw lastError!!
+        partial = ok < boxes.size
         found.values.toList()
     }
 
@@ -58,11 +83,14 @@ object Traffic {
             "&fields=" + URLEncoder.encode(FIELDS, "UTF-8") +
             "&language=pt-PT"
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 7000
-        conn.readTimeout = 10000
+        conn.connectTimeout = 15000
+        conn.readTimeout = 25000
+        conn.setRequestProperty("Accept-Encoding", "gzip")
         try {
-            if (conn.responseCode != 200) throw java.io.IOException("TomTom HTTP ${conn.responseCode}")
-            return conn.inputStream.bufferedReader().use { it.readText() }
+            if (conn.responseCode != 200) throw java.io.IOException("TomTom respondeu ${conn.responseCode}")
+            val raw = conn.inputStream
+            val input = if (conn.contentEncoding.equals("gzip", true)) java.util.zip.GZIPInputStream(raw) else raw
+            return input.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()
         }

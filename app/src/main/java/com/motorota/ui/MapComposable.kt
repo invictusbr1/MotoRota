@@ -74,6 +74,12 @@ fun MapLibreMapView(
             m.uiSettings.isTiltGesturesEnabled = false
             m.uiSettings.isAttributionEnabled = true
             m.cameraPosition = CameraPosition.Builder().target(LatLng(-22.9068, -43.1729)).zoom(10.0).build()
+            // arrastou o mapa durante a navegacao: para de seguir (aparece "Re-centralizar")
+            m.addOnCameraMoveStartedListener { reason ->
+                if (reason == org.maplibre.android.maps.MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE && vm.navigating) {
+                    vm.following = false
+                }
+            }
             m.addOnMapLongClickListener { p ->
                 onLongPress(GeoPoint(p.latitude, p.longitude)); true
             }
@@ -156,7 +162,7 @@ fun MapLibreMapView(
         if (m.locationComponent.isLocationComponentActivated) {
             m.locationComponent.forceLocationUpdate(Location(loc))
         }
-        if (vm.navigating) {
+        if (vm.navigating && vm.following) {
             // zoom muda devagar e so quando a velocidade muda de verdade;
             // perto de uma manobra (bifurcacao, saida, curva) aproxima mais
             val target = navZoom(vm.speedKmh, vm.navState?.distToHintM)
@@ -184,19 +190,39 @@ fun MapLibreMapView(
         if (!lc.isLocationComponentActivated) return@LaunchedEffect
         if (vm.navigating) {
             currentZoom = navZoom(vm.speedKmh, vm.navState?.distToHintM)
-            // moto no terco de baixo da tela: mais estrada visivel a frente
-            // (o enquadramento vem ANTES de ligar o "seguir", senao ele desliga o modo)
-            // moto bem embaixo (~78% da altura) e camera baixa/inclinada: ve a estrada la na frente
-            val h = m.height.toDouble().takeIf { it > 0 } ?: with(density) { 800.dp.toPx().toDouble() }
-            m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.56, 0.0, 0.0))
-            lc.cameraMode = CameraMode.TRACKING_GPS
-            lc.tiltWhileTracking(60.0)
-            lc.zoomWhileTracking(currentZoom)
+            follow(m, currentZoom)
         } else {
             lc.cameraMode = CameraMode.NONE
             m.moveCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, 0.0, 0.0))
             m.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder().tilt(0.0).bearing(0.0).build()))
         }
+    }
+
+    // "Re-centralizar": volta a seguir a moto
+    LaunchedEffect(vm.recenterRequest) {
+        if (vm.recenterRequest == 0 || !vm.navigating) return@LaunchedEffect
+        val m = map ?: return@LaunchedEffect
+        if (!m.locationComponent.isLocationComponentActivated) return@LaunchedEffect
+        currentZoom = navZoom(vm.speedKmh, vm.navState?.distToHintM)
+        follow(m, currentZoom)
+    }
+
+    // "Geral": mostra o que falta da rota inteira, de cima
+    LaunchedEffect(vm.overviewRequest) {
+        if (vm.overviewRequest == 0 || !vm.navigating) return@LaunchedEffect
+        val m = map ?: return@LaunchedEffect
+        val r = vm.currentRoute ?: return@LaunchedEffect
+        val from = vm.navState?.progressIndex ?: 0
+        val pts = r.points.subList(from.coerceIn(0, r.points.size - 1), r.points.size)
+        if (pts.size < 2) return@LaunchedEffect
+        if (m.locationComponent.isLocationComponentActivated) m.locationComponent.cameraMode = CameraMode.NONE
+        m.moveCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, 0.0, 0.0))
+        val b = LatLngBounds.Builder()
+        pts.forEach { b.include(LatLng(it.lat, it.lon)) }
+        val side = with(density) { 40.dp.toPx().toInt() }
+        val top = with(density) { 200.dp.toPx().toInt() }
+        val bottom = with(density) { 230.dp.toPx().toInt() }
+        m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 0.0, 0.0, side, top, side, bottom), 900)
     }
 
     // navegando: a linha azul so mostra o que falta (o trecho percorrido some)
@@ -230,6 +256,20 @@ fun MapLibreMapView(
     }
 
     AndroidView(factory = { mapView }, modifier = modifier)
+}
+
+/**
+ * Camera "grudada" na moto, inclinada e girando com a direcao.
+ * A moto fica a ~62% da altura: acima do painel de baixo (velocidade/chegada) e com estrada a frente.
+ * (o enquadramento vem ANTES de ligar o "seguir", senao ele desliga o modo)
+ */
+private fun follow(m: org.maplibre.android.maps.MapLibreMap, zoom: Double) {
+    val lc = m.locationComponent
+    val h = m.height.toDouble().takeIf { it > 0 } ?: 1600.0
+    m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.44, 0.0, h * 0.20))
+    lc.cameraMode = CameraMode.TRACKING_GPS
+    lc.tiltWhileTracking(60.0)
+    lc.zoomWhileTracking(zoom)
 }
 
 /**

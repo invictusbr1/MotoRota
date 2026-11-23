@@ -88,6 +88,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("satelite", satellite).apply()
     }
 
+    // ---------- botoes fixados na tela (menu configuravel) ----------
+    private var pinnedMap by mutableStateOf(
+        prefs.getStringSet("botoes_mapa", null)?.toSet() ?: com.motorota.ui.QuickAction.DEFAULT_MAP
+    )
+    private var pinnedNav by mutableStateOf(
+        prefs.getStringSet("botoes_nav", null)?.toSet() ?: com.motorota.ui.QuickAction.DEFAULT_NAV
+    )
+    fun pinned(nav: Boolean): Set<String> = if (nav) pinnedNav else pinnedMap
+    fun togglePin(nav: Boolean, id: String) {
+        val cur = pinned(nav)
+        val next = if (id in cur) cur - id else cur + id
+        if (nav) pinnedNav = next else pinnedMap = next
+        prefs.edit().putStringSet(if (nav) "botoes_nav" else "botoes_mapa", next).apply()
+    }
+
+    // ---------- camera da navegacao ----------
+    /** true = camera seguindo a moto; false = o piloto arrastou o mapa ou pediu a visao geral */
+    var following by mutableStateOf(true)
+    var recenterRequest by mutableStateOf(0); private set
+    var overviewRequest by mutableStateOf(0); private set
+    fun recenter() { following = true; recenterRequest++ }
+    fun overview() { following = false; overviewRequest++ }
+
     // ---------- areas de risco conhecidas (vem com o app) ----------
     var knownRisksOn by mutableStateOf(prefs.getBoolean("areas_conhecidas", true)); private set
     var knownRisksVersion by mutableStateOf(0); private set
@@ -211,6 +234,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         trafficStatus = null
     }
 
+    private fun hasInternet(): Boolean {
+        val cm = getApplication<Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun shortReason(e: Throwable): String = when (e) {
+        is java.net.SocketTimeoutException -> "demorou para responder"
+        is java.net.UnknownHostException -> "servidor não encontrado"
+        else -> e.message?.take(40) ?: e.javaClass.simpleName
+    }
+
     /** Confere na TomTom o caminho escolhido; se tiver via interditada, desvia sozinho. */
     private fun checkTraffic(r: RouteResult, gen: Int) {
         if (!com.motorota.data.Traffic.enabled) return
@@ -223,7 +258,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Throwable) {
                 android.util.Log.w("MotoRota", "transito TomTom falhou: $e")
-                if (gen == generation) trafficStatus = "📡 Sem internet: trânsito ao vivo não consultado"
+                if (gen == generation) {
+                    trafficStatus = if (!hasInternet()) "📡 Sem internet: trânsito ao vivo não consultado"
+                    else "📡 Trânsito ao vivo indisponível agora (${shortReason(e)}). A rota segue normal."
+                }
                 return@launch
             }
             if (gen != generation) return@launch
@@ -244,7 +282,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             liveIncidents = found
             val desvios = closures.size
             trafficStatus = when {
-                found.isEmpty() && desvios == 0 -> "✅ Trânsito agora: nada de anormal no caminho"
+                found.isEmpty() && desvios == 0 ->
+                    if (com.motorota.data.Traffic.partial) "✅ Trânsito agora: nada de anormal (parte da rota não foi consultada)"
+                    else "✅ Trânsito agora: nada de anormal no caminho"
                 else -> listOfNotNull(
                     if (desvios > 0) "⛔ $desvios interdição(ões) evitada(s)" else null,
                     if (found.isNotEmpty()) "${found.size} ocorrência(s) agora no caminho" else null,
@@ -495,6 +535,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tripMaxKmh = 0
         tripMovingS = 0.0
         tripStartMs = System.currentTimeMillis()
+        following = true
         navigating = true
         offRouteCount = 0
         myLocation?.let { navState = navigator?.update(it) }

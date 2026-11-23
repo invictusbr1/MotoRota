@@ -43,10 +43,12 @@ tapt "☀️" || tapt "&#127769;"; sleep 3; alive "trocar tema"; $A exec-out scr
 tapt "☀️" || tapt "&#127769;"; sleep 2
 tapt "&#128752;"; sleep 4; alive "satelite ligado"; $A exec-out screencap -p > "$S/sw_sat.png"
 tapt "&#128752;"; sleep 2; alive "satelite desligado"
-tapt "⚙️"; sleep 2; alive "ajustes"; $A exec-out screencap -p > "$S/sw_ajustes.png"
+tapt "☰"; sleep 2; alive "menu"; $A exec-out screencap -p > "$S/sw_menu.png"; tapt "Ajustes da moto"; sleep 2; alive "ajustes"; $A exec-out screencap -p > "$S/sw_ajustes.png"
 tapt "km por tanque"; sleep 1; $A shell input text 300; $A shell input keyevent 4; sleep 1; tapt "Salvar"; sleep 1; alive "salvar autonomia"
 tapt "Abasteci"; sleep 2; alive "abasteci"
-tapt "⚙️" >/dev/null 2>&1; tapt "Fechar"; sleep 1; alive "fechar ajustes"
+tapt "Fechar"; sleep 1; alive "fechar ajustes"
+# fixar / desafixar um botao pelo menu (toca no primeiro alfinete duas vezes: tira e poe de volta)
+tapt "☰"; sleep 2; tapt "&#128204;"; sleep 1; $A exec-out screencap -p > "$S/sw_pin.png"; tapt "&#128204;"; sleep 1; alive "fixar botao"; tapt "Fechar"; sleep 1
 
 longpress 420 1200; tapt "Ir para cá"; sleep 2
 for i in $(seq 1 30); do sleep 2; n=$($A logcat -d -s MotoRota | grep -c "rota "); [ "$n" -ge 3 ] && break; done
@@ -60,8 +62,11 @@ tapt "Pronto"; sleep 8; alive "pronto"
 tapt "⭐"; sleep 2; $A exec-out screencap -p > "$S/sw_trips.png"; alive "lista de passeios"; tapt "Fechar"; sleep 1
 tapt "INICIAR"; sleep 4; alive "iniciar navegacao"
 for i in $(seq 0 12); do $A emu geo fix $(python -c "print(-43.1729-0.00025*$i)") $(python -c "print(-22.9068+0.0001*$i)") >/dev/null; sleep 1; done; $A exec-out screencap -p > "$S/sw_cockpit.png"
+$A exec-out screencap -p > "$S/sw_nav.png"
+$A shell input swipe 300 1000 700 700 400; sleep 2; $A exec-out screencap -p > "$S/sw_solto.png"; tapt "Re-centralizar"; sleep 3; alive "re-centralizar"
+tapt "Geral"; sleep 3; $A exec-out screencap -p > "$S/sw_geral.png"; alive "visao geral"; tapt "Re-centralizar"; sleep 2
 tapt "⚠️"; sleep 2; alive "botao avisar na navegacao"; tapt "Cancelar"; sleep 1
-tapt "Sair"; sleep 2; alive "sair da navegacao"
+tapt "☰"; sleep 2; alive "menu na navegacao"; tapt "Sair da navegação"; sleep 2; alive "sair da navegacao"
 $A exec-out screencap -p > "$S/sw_resumo.png"; tapt "OK"; sleep 1; alive "resumo da viagem"
 tapt "Cancelar"; sleep 2; alive "cancelar rota"
 echo "VARREDURA COMPLETA SEM FECHAR"
