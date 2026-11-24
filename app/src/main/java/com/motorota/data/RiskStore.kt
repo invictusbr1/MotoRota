@@ -7,7 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/** Areas de risco marcadas pelo usuario. Ficam salvas no proprio celular. */
+/** Áreas de risco marcadas pelo usuário. Ficam salvas no próprio celular. */
 class RiskStore(ctx: Context) {
     private val file = File(ctx.filesDir, "areas_de_risco.json")
 
@@ -15,17 +15,19 @@ class RiskStore(ctx: Context) {
         if (!file.exists()) return emptyList()
         return try {
             val arr = JSONArray(file.readText())
-            (0 until arr.length()).map { i ->
-                val o = arr.getJSONObject(i)
-                RiskArea(
-                    id = o.getLong("id"),
-                    point = GeoPoint(o.getDouble("lat"), o.getDouble("lon")),
-                    radiusM = o.getInt("raio"),
-                    label = o.optString("nome", "Área de risco"),
-                    createdAt = o.optLong("criado", 0),
-                )
+            (0 until arr.length()).mapNotNull { i ->
+                runCatching {
+                    val o = arr.getJSONObject(i)
+                    RiskArea(
+                        id = o.getLong("id"),
+                        point = GeoPoint(o.getDouble("lat"), o.getDouble("lon")),
+                        radiusM = o.getInt("raio"),
+                        label = o.optString("nome", "Área de risco"),
+                        createdAt = o.optLong("criado", 0),
+                    )
+                }.getOrNull()
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -43,8 +45,6 @@ class RiskStore(ctx: Context) {
                     .put("criado", it.createdAt)
             )
         }
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(arr.toString())
-        tmp.renameTo(file)
+        atomicWrite(file, arr.toString())
     }
 }

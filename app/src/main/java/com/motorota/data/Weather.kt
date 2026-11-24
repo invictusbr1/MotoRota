@@ -57,8 +57,9 @@ object Weather {
         }
         val lats = samples.joinToString(",") { "%.4f".format(java.util.Locale.US, it.first.lat) }
         val lons = samples.joinToString(",") { "%.4f".format(java.util.Locale.US, it.first.lon) }
+        val tz = java.net.URLEncoder.encode(ZoneId.systemDefault().id, "UTF-8")
         val url = "https://api.open-meteo.com/v1/forecast?latitude=$lats&longitude=$lons" +
-            "&hourly=precipitation_probability,precipitation&forecast_days=2&timezone=America%2FSao_Paulo"
+            "&hourly=precipitation_probability,precipitation&forecast_days=3&timezone=$tz"
         val body = get(url)
         // varios pontos -> lista; um ponto -> objeto
         val arr = if (body.trimStart().startsWith("[")) org.json.JSONArray(body) else org.json.JSONArray().put(JSONObject(body))

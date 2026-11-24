@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,7 +28,7 @@ val ConectaCyan = Color(0xFF22D3EE)
 @Composable
 fun SplashScreen() {
     Column(
-        Modifier.fillMaxSize().background(ConectaNavy).padding(24.dp),
+        Modifier.fillMaxSize().background(ConectaNavy).padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -35,10 +36,11 @@ fun SplashScreen() {
             painter = painterResource(R.drawable.logo_grupo_conecta),
             contentDescription = "Grupo Conecta",
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 280.dp),
         )
-        Spacer(Modifier.height(28.dp))
-        Text("MotoRota", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Text("navegação para moto", color = ConectaCyan, fontSize = 15.sp)
+        Spacer(Modifier.height(24.dp))
+        Text("MotoRota", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.height(4.dp))
+        Text("Navegação inteligente para motociclistas", color = ConectaCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }

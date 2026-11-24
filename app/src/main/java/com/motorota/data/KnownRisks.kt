@@ -4,9 +4,9 @@ import android.content.Context
 import com.motorota.routing.GeoPoint
 
 /**
- * Area de risco que ja vem com o app (pesquisa em fontes publicas).
+ * Área de risco que já vem com o app (pesquisa em fontes públicas).
  * EVITAR = a rota desvia das ruas internas (as vias expressas da borda continuam liberadas).
- * ATENCAO = a rota nao muda, so avisa (ex.: estradas campeas de roubo de moto).
+ * ATENÇÃO = a rota não muda, só avisa (ex.: estradas campeãs de roubo de moto).
  */
 data class KnownRisk(
     val avoid: Boolean,
@@ -20,7 +20,7 @@ data class KnownRisk(
 object KnownRisks {
     @Volatile var all: List<KnownRisk> = emptyList(); private set
 
-    /** assets/areas_risco.csv: nivel;lat;lon;raio;nome;cidade;motivo  (nivel E = evitar, A = atencao) */
+    /** assets/areas_risco.csv: nivel;lat;lon;raio;nome;cidade;motivo (nivel E = evitar, A = atencao) */
     fun load(ctx: Context) {
         val out = ArrayList<KnownRisk>()
         ctx.assets.open("areas_risco.csv").bufferedReader().useLines { lines ->
@@ -28,11 +28,14 @@ object KnownRisks {
                 if (line.isBlank() || line.startsWith("#") || line.startsWith("nivel")) continue
                 val c = line.split(';')
                 if (c.size < 7) continue
+                val lat = c[1].trim().toDoubleOrNull() ?: continue
+                val lon = c[2].trim().toDoubleOrNull() ?: continue
+                val radius = c[3].trim().toIntOrNull() ?: continue
                 out.add(
                     KnownRisk(
                         avoid = c[0].trim() == "E",
-                        point = GeoPoint(c[1].toDouble(), c[2].toDouble()),
-                        radiusM = c[3].toInt(),
+                        point = GeoPoint(lat, lon),
+                        radiusM = radius,
                         name = c[4].trim(),
                         city = c[5].trim(),
                         reason = c[6].trim(),

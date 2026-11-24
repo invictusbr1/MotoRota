@@ -1,47 +1,90 @@
 package com.motorota
 
 import android.app.Application
+import android.content.Context
 import android.location.Location
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.motorota.data.Corridor
+import com.motorota.data.Corridors
 import com.motorota.data.Geocoder
+import com.motorota.data.Hazard
+import com.motorota.data.HazardStore
+import com.motorota.data.HazardType
+import com.motorota.data.KnownRisk
+import com.motorota.data.KnownRisks
+import com.motorota.data.LiveIncident
 import com.motorota.data.MapDownloader
 import com.motorota.data.Place
+import com.motorota.data.RadarStore
 import com.motorota.data.RiskStore
+import com.motorota.data.RouteWeather
+import com.motorota.data.SavedPoint
+import com.motorota.data.SavedTrip
+import com.motorota.data.Traffic
+import com.motorota.data.TripStore
+import com.motorota.data.UpdateInfo
+import com.motorota.data.Updater
+import com.motorota.data.UrbanZone
+import com.motorota.data.Weather
+import com.motorota.nav.AlongAlert
+import com.motorota.nav.Instructions
 import com.motorota.nav.NavState
+import com.motorota.nav.NavigationBridge
+import com.motorota.nav.NavigationService
 import com.motorota.nav.Navigator
+import com.motorota.nav.RouteAlerts
 import com.motorota.routing.GeoPoint
 import com.motorota.routing.Mode
 import com.motorota.routing.RiskArea
-import com.motorota.routing.RouteException
 import com.motorota.routing.RouteEngine
+import com.motorota.routing.RouteException
 import com.motorota.routing.RouteResult
 import com.motorota.routing.Waypoint
+import com.motorota.routing.formatDistance
+import com.motorota.routing.formatDuration
+import com.motorota.ui.QuickAction
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.time.LocalTime
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val engine = RouteEngine(app)
     val downloader = MapDownloader(app, engine.segmentDir)
     private val riskStore = RiskStore(app)
-    val radarStore = com.motorota.data.RadarStore(app)
-    private val hazardStore = com.motorota.data.HazardStore(app)
-    private val tripStore = com.motorota.data.TripStore(app)
+    val radarStore = RadarStore(app)
+    private val hazardStore = HazardStore(app)
+    private val tripStore = TripStore(app)
+    private val prefs = app.getSharedPreferences("preferencias", Context.MODE_PRIVATE)
 
-    // ---------- estado da tela ----------
+    // ---------- Estado de GPS ----------
     var myLocation by mutableStateOf<GeoPoint?>(null); private set
     var speedKmh by mutableStateOf(0); private set
     var bearing by mutableStateOf(0f); private set
     var lastLocation by mutableStateOf<Location?>(null); private set
+    var gpsLost by mutableStateOf(false); private set
 
-    /** partida escolhida no mapa; null = usar o GPS */
+    // ---------- Roteiro e Modos ----------
     var origin by mutableStateOf<Waypoint?>(null); private set
     var stops by mutableStateOf<List<Waypoint>>(emptyList()); private set
     var destination by mutableStateOf<Waypoint?>(null); private set
@@ -50,30 +93,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var routes by mutableStateOf<Map<Mode, RouteResult>>(emptyMap()); private set
     var routeErrors by mutableStateOf<Map<Mode, String>>(emptyMap()); private set
     var calculating by mutableStateOf<Set<Mode>>(emptySet()); private set
+    val currentRoute: RouteResult? get() = routes[mode]
 
+    // ---------- Dados Salvos ----------
     var risks by mutableStateOf(riskStore.load()); private set
     var hazards by mutableStateOf(hazardStore.load()); private set
     var trips by mutableStateOf(tripStore.load()); private set
 
-    /** tema do mapa: noite automatico das 18h as 6h */
-    var night by mutableStateOf(java.time.LocalTime.now().hour.let { it >= 18 || it < 6 })
+    // ---------- Preferências Visuais e Áudio ----------
+    var night by mutableStateOf(LocalTime.now().hour.let { it >= 18 || it < 6 })
 
-    /** radares e alertas em cima da rota em navegacao */
-    var alongAlerts by mutableStateOf<List<com.motorota.nav.AlongAlert>>(emptyList()); private set
-    var nextAlert by mutableStateOf<Pair<com.motorota.nav.AlongAlert, Double>?>(null); private set
-    var currentLimit by mutableStateOf<Int?>(null); private set
+    var showMapTip by mutableStateOf(!prefs.getBoolean("dica_vista", false)); private set
+    fun dismissMapTip() {
+        showMapTip = false
+        prefs.edit().putBoolean("dica_vista", true).apply()
+    }
 
-    var navigating by mutableStateOf(false); private set
-    var navState by mutableStateOf<NavState?>(null); private set
-    var rerouting by mutableStateOf(false); private set
-
-    var searchResults by mutableStateOf<List<Place>>(emptyList()); private set
-    var searching by mutableStateOf(false); private set
-
-    var message by mutableStateOf<String?>(null)
-    private val prefs = app.getSharedPreferences("preferencias", android.content.Context.MODE_PRIVATE)
-
-    /** voz ligada/desligada (fica salvo). Desligar corta na hora o que estiver falando. */
     var voiceOn by mutableStateOf(prefs.getBoolean("voz", true)); private set
     fun toggleVoice() {
         voiceOn = !voiceOn
@@ -81,19 +116,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!voiceOn) tts?.stop()
     }
 
-    /** imagem de satelite no mapa (fica salvo) */
     var satellite by mutableStateOf(prefs.getBoolean("satelite", false)); private set
     fun toggleSatellite() {
         satellite = !satellite
         prefs.edit().putBoolean("satelite", satellite).apply()
     }
 
-    // ---------- botoes fixados na tela (menu configuravel) ----------
     private var pinnedMap by mutableStateOf(
-        prefs.getStringSet("botoes_mapa", null)?.toSet() ?: com.motorota.ui.QuickAction.DEFAULT_MAP
+        prefs.getStringSet("botoes_mapa", null)?.toSet() ?: QuickAction.DEFAULT_MAP
     )
     private var pinnedNav by mutableStateOf(
-        prefs.getStringSet("botoes_nav", null)?.toSet() ?: com.motorota.ui.QuickAction.DEFAULT_NAV
+        prefs.getStringSet("botoes_nav", null)?.toSet() ?: QuickAction.DEFAULT_NAV
     )
     fun pinned(nav: Boolean): Set<String> = if (nav) pinnedNav else pinnedMap
     fun togglePin(nav: Boolean, id: String) {
@@ -103,48 +136,71 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putStringSet(if (nav) "botoes_nav" else "botoes_mapa", next).apply()
     }
 
-    // ---------- camera da navegacao ----------
-    /** true = camera seguindo a moto; false = o piloto arrastou o mapa ou pediu a visao geral */
+    // ---------- Câmera e Enquadramento ----------
     var following by mutableStateOf(true)
     var recenterRequest by mutableStateOf(0); private set
     var overviewRequest by mutableStateOf(0); private set
+    var fitRequest by mutableStateOf(0); private set
+    var centerRequest by mutableStateOf(0); private set
+
     fun recenter() { following = true; recenterRequest++ }
     fun overview() { following = false; overviewRequest++ }
+    fun fitRoute() { fitRequest++ }
+    fun centerOnMe() {
+        if (myLocation == null) message = "Ainda sem sinal de GPS." else centerRequest++
+    }
 
-    // ---------- areas de risco conhecidas (vem com o app) ----------
+    // ---------- Navegação Ativa ----------
+    var alongAlerts by mutableStateOf<List<AlongAlert>>(emptyList()); private set
+    var nextAlert by mutableStateOf<Pair<AlongAlert, Double>?>(null); private set
+    var currentLimit by mutableStateOf<Int?>(null); private set
+    var navigating by mutableStateOf(false); private set
+    var navState by mutableStateOf<NavState?>(null); private set
+    var rerouting by mutableStateOf(false); private set
+
+    // ---------- Busca e Feedback ----------
+    var searchResults by mutableStateOf<List<Place>>(emptyList()); private set
+    var searching by mutableStateOf(false); private set
+    var message by mutableStateOf<String?>(null)
+    var update by mutableStateOf<UpdateInfo?>(null)
+
+    // ---------- Áreas e Corredores de Risco ----------
     var knownRisksOn by mutableStateOf(prefs.getBoolean("areas_conhecidas", true)); private set
     var knownRisksVersion by mutableStateOf(0); private set
+    var radarsVersion by mutableStateOf(0); private set
+    private val riskDataReady = CompletableDeferred<Unit>()
+
     fun toggleKnownRisks() {
         knownRisksOn = !knownRisksOn
         prefs.edit().putBoolean("areas_conhecidas", knownRisksOn).apply()
         knownRisksVersion++
         if (destination != null && !navigating) recalc(fit = false)
     }
-    fun known(): List<com.motorota.data.KnownRisk> = if (knownRisksOn) com.motorota.data.KnownRisks.all else emptyList()
-    fun corridors(): List<com.motorota.data.Corridor> = if (knownRisksOn) com.motorota.data.Corridors.all else emptyList()
-    fun zones(): List<com.motorota.data.UrbanZone> = if (knownRisksOn) com.motorota.data.Corridors.zones else emptyList()
-    /** trechos perigosos por onde a rota passa (para o painel) */
-    fun corridorHits(r: RouteResult) = com.motorota.data.Corridors.hits(r, corridors())
+    fun known(): List<KnownRisk> = if (knownRisksOn) KnownRisks.all else emptyList()
+    fun corridors(): List<Corridor> = if (knownRisksOn) Corridors.all else emptyList()
+    fun zones(): List<UrbanZone> = if (knownRisksOn) Corridors.zones else emptyList()
+    fun corridorHits(r: RouteResult) = Corridors.hits(r, corridors())
 
-    // ---------- autonomia do tanque ----------
-    /** quantos km a moto roda com um tanque (0 = nao usar) */
+    // ---------- Autonomia do Tanque ----------
     var tankKm by mutableStateOf(prefs.getInt("tanque_km", 0)); private set
-    /** km rodados desde o ultimo "Abasteci" */
     var kmSinceFill by mutableStateOf(prefs.getFloat("km_desde_abastecer", 0f)); private set
     private var fuelWarnLevel = 0
     private var lastFuelSave = 0f
     val fuelLeftKm: Int? get() = if (tankKm > 0) (tankKm - kmSinceFill).toInt() else null
+
     fun setTank(km: Int) {
         tankKm = km.coerceIn(0, 2000)
         prefs.edit().putInt("tanque_km", tankKm).apply()
     }
+
     fun refuel() {
         kmSinceFill = 0f
         lastFuelSave = 0f
         fuelWarnLevel = 0
         prefs.edit().putFloat("km_desde_abastecer", 0f).apply()
-        message = "⛽ Tanque cheio: $tankKm km de autonomia."
+        message = "Tanque cheio: $tankKm km de autonomia."
     }
+
     private fun addRiddenKm(km: Double) {
         if (tankKm <= 0) return
         kmSinceFill += km.toFloat()
@@ -162,66 +218,192 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             fuelWarnLevel = level
             val txt = if (level == 2) "Reserva! Cerca de ${left.toInt().coerceAtLeast(0)} quilômetros de autonomia."
             else "Autonomia baixa: cerca de ${left.toInt()} quilômetros. Procure um posto."
-            say(txt)
-            message = "⛽ $txt"
+            say(txt, urgent = false)
+            message = txt
         }
     }
 
-    // ---------- computador de bordo ----------
-    data class TripSummary(val distM: Double, val timeS: Long, val movingS: Long, val avgKmh: Int, val maxKmh: Int, val arrived: Boolean)
+    // ---------- Computador de Bordo ----------
+    data class TripSummary(
+        val distM: Double,
+        val timeS: Long,
+        val movingS: Long,
+        val avgKmh: Int,
+        val maxKmh: Int,
+        val arrived: Boolean,
+    )
+
     var tripDistM by mutableStateOf(0.0); private set
     var tripMaxKmh by mutableStateOf(0); private set
-    private var tripStartMs = 0L
+    private var tripStartElapsedMs = 0L
     private var tripMovingS = 0.0
     var tripSummary by mutableStateOf<TripSummary?>(null)
     val tripAvgKmh: Int get() = if (tripMovingS > 30) (tripDistM / tripMovingS * 3.6).toInt() else 0
-    val tripElapsedS: Long get() = if (tripStartMs > 0) (System.currentTimeMillis() - tripStartMs) / 1000 else 0
+    val tripElapsedS: Long get() = if (tripStartElapsedMs > 0) (SystemClock.elapsedRealtime() - tripStartElapsedMs) / 1000 else 0
 
-    // ---------- clima e por do sol no caminho ----------
-    var routeWeather by mutableStateOf<com.motorota.data.RouteWeather?>(null); private set
+    // ---------- Clima e Trânsito ao Vivo ----------
+    var routeWeather by mutableStateOf<RouteWeather?>(null); private set
+    var liveIncidents by mutableStateOf<List<LiveIncident>>(emptyList()); private set
+    var trafficStatus by mutableStateOf<String?>(null); private set
+    private var closures = listOf<RiskArea>()
+    private var closureRounds = 0
+
+    private var generation = 0
+    private var pendingStart = false
+    private var routeJob: Job? = null
+    private var searchJob: Job? = null
     private var weatherJob: Job? = null
-    private fun checkWeather(r: RouteResult, gen: Int) {
-        weatherJob?.cancel()
-        weatherJob = viewModelScope.launch {
-            val w = try {
-                com.motorota.data.Weather.along(r)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                android.util.Log.w("MotoRota", "clima falhou: $e")
-                com.motorota.data.Weather.offline(r)
+    private var trafficJob: Job? = null
+    private var editJob: Job? = null
+    private var navigator: Navigator? = null
+    private var offRouteCount = 0
+    private var lastNotifUpdateMs = 0L
+
+    // ---------- Voz (TTS com proteção contra corte de manobras) ----------
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var lastUrgentSpeechMs = 0L
+
+    init {
+        NavigationBridge.onLocation = { loc -> onLocation(loc) }
+        NavigationBridge.onStopRequested = { stopNavigation(arrived = false) }
+
+        viewModelScope.launch {
+            delay(4000)
+            update = Updater.check()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { KnownRisks.load(app) }.onFailure { Log.w("MotoRota", "areas de risco: $it") }
+            runCatching { Corridors.load(app) }.onFailure { Log.w("MotoRota", "trechos perigosos: $it") }
+            riskDataReady.complete(Unit)
+            withContext(Dispatchers.Main) { knownRisksVersion++ }
+            radarStore.load()
+            withContext(Dispatchers.Main) { radarsVersion++ }
+        }
+        // Watchdog: zera velocidade travada se perder GPS (ex.: túnel ou parada completa)
+        viewModelScope.launch {
+            while (true) {
+                delay(2000)
+                val prev = lastFix
+                if (prev != null) {
+                    val silenceMs = SystemClock.elapsedRealtime() - prev.second
+                    if (silenceMs > 5000 && speedKmh > 0) {
+                        speedKmh = 0
+                        smoothSpeed = -1.0
+                    }
+                    gpsLost = navigating && silenceMs > 10_000
+                }
             }
-            if (gen == generation) routeWeather = w
+        }
+        tts = TextToSpeech(app) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale("pt", "BR")
+                ttsReady = true
+            }
         }
     }
 
-    /** versao nova disponivel no GitHub (null = nenhuma) */
-    var update by mutableStateOf<com.motorota.data.UpdateInfo?>(null)
-
-    /** iniciar a navegacao assim que a rota (re)calculada ficar pronta */
-    private var pendingStart = false
-
-    /** muda sempre que o mapa precisa enquadrar a rota inteira */
-    var fitRequest by mutableStateOf(0); private set
-    var centerRequest by mutableStateOf(0); private set
-    fun centerOnMe() {
-        if (myLocation == null) message = "Ainda sem sinal de GPS." else centerRequest++
+    override fun onCleared() {
+        NavigationBridge.onLocation = null
+        NavigationBridge.onStopRequested = null
+        NavigationService.stop(getApplication())
+        tts?.shutdown()
     }
 
-    private var generation = 0
-    /** fica pronto quando as areas e trechos de risco terminam de carregar (as rotas esperam por isso) */
-    private val riskDataReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+    // ---------- Processamento de GPS ----------
+    private var lastGpsFix = 0L
+    private var lastFix: Pair<GeoPoint, Long>? = null
+    private var smoothSpeed = -1.0
 
-    // ---------- transito ao vivo (TomTom) ----------
-    /** ocorrencias de agora que estao no caminho (acidente, obra, alagamento...) */
-    var liveIncidents by mutableStateOf<List<com.motorota.data.LiveIncident>>(emptyList()); private set
-    /** frase curta para o painel: "consultando...", "nada no caminho", etc. */
-    var trafficStatus by mutableStateOf<String?>(null); private set
-    /** vias interditadas agora: viram bloqueios temporarios no calculo da rota */
-    private var closures = listOf<RiskArea>()
-    private var closureRounds = 0
-    private var trafficJob: Job? = null
+    fun onLocation(loc: Location) {
+        val nowWall = System.currentTimeMillis()
+        if (loc.provider == LocationManagerProviderGps) lastGpsFix = nowWall
+        else if (nowWall - lastGpsFix < 15_000) return
 
+        val nowMs = SystemClock.elapsedRealtime()
+        val prev = lastFix
+        if (prev != null && nowMs - prev.second < 250) return // evita duplicidade entre Activity e Service
+
+        val p = GeoPoint(loc.latitude, loc.longitude)
+        val dt = prev?.let { (nowMs - it.second) / 1000.0 } ?: 0.0
+        val moved = prev?.first?.distanceTo(p) ?: 0.0
+
+        val derived = (if (prev != null && dt in 0.3..10.0) moved / dt else -1.0).let { if (it > 90) -1.0 else it }
+        val gpsSpeedBad = !loc.hasSpeed() || loc.speed > 90f ||
+            (loc.speed < 0.5f && derived > 3) ||
+            (derived >= 0 && abs(loc.speed - derived) > 15)
+
+        if (derived >= 0 && gpsSpeedBad) {
+            val limited = if (smoothSpeed < 0) derived else derived.coerceIn(smoothSpeed - 4 * dt, smoothSpeed + 4 * dt)
+            smoothSpeed = if (smoothSpeed < 0) limited else smoothSpeed * 0.6 + limited * 0.4
+            loc.speed = smoothSpeed.toFloat()
+        }
+        if ((!loc.hasBearing() || loc.bearing == 0f) && prev != null && moved > 3) {
+            val k = cos(Math.toRadians(p.lat))
+            loc.bearing = ((Math.toDegrees(atan2((p.lon - prev.first.lon) * k, p.lat - prev.first.lat)) + 360) % 360).toFloat()
+        }
+
+        lastFix = p to nowMs
+        gpsLost = false
+
+        if (prev != null && dt in 0.3..10.0 && derived in 1.0..90.0 && moved < 900) {
+            addRiddenKm(moved / 1000.0)
+            if (navigating) {
+                tripDistM += moved
+                tripMovingS += dt
+            }
+        }
+
+        lastLocation = Location(loc).apply { if (speed < 1.5f || !hasBearing()) bearing = this@AppViewModel.bearing }
+        myLocation = p
+        if (loc.speed > 90f) loc.speed = 0f
+        speedKmh = if (loc.hasSpeed()) (loc.speed * 3.6f).toInt() else 0
+        if (loc.hasBearing() && loc.speed > 1.5f) bearing = loc.bearing
+        if (navigating && speedKmh > tripMaxKmh && speedKmh < 320) tripMaxKmh = speedKmh
+
+        val nav = navigator ?: return
+        if (!navigating) return
+        val st = nav.update(p)
+        navState = st
+
+        if (stops.isNotEmpty() && p.distanceTo(stops.first().point) < 100) {
+            stops = stops.drop(1)
+            say("Parada alcançada.", urgent = false)
+        }
+
+        if (st.arrived) {
+            say("Você chegou ao destino.", urgent = true)
+            stopNavigation(arrived = true)
+            return
+        }
+
+        nav.speechFor(st, loc.speed)?.let { say(it, urgent = true) }
+
+        currentLimit = nav.limitAt(st.alongM)
+        val ahead = alongAlerts.firstOrNull { it.posM > st.alongM + 5 && it.posM - st.alongM < 2000 }
+        nextAlert = ahead?.let { it to (it.posM - st.alongM).coerceAtLeast(0.0) }
+        ahead?.let { a -> nav.alertSpeech(a, a.posM - st.alongM, loc.speed)?.let { say(it, urgent = false) } }
+
+        // Atualiza notificação de 1º plano a cada ~5s
+        if (nowMs - lastNotifUpdateMs > 5000) {
+            lastNotifUpdateMs = nowMs
+            val actionTxt = st.nextHint?.let {
+                "${formatDistance(st.distToHintM)} · ${Instructions.text(it).replaceFirstChar { c -> c.uppercase() }}"
+            } ?: "Siga até o destino"
+            val subTxt = "Faltam ${formatDistance(st.remainingM)} (${formatDuration(st.remainingS)})"
+            NavigationService.update(getApplication(), actionTxt, subTxt)
+        }
+
+        val limit = if (loc.hasAccuracy()) maxOf(50f, loc.accuracy * 1.5f) else 50f
+        if (st.offRouteM > limit) {
+            offRouteCount++
+            if (offRouteCount >= 3 && !rerouting) reroute(p)
+        } else {
+            offRouteCount = 0
+        }
+    }
+
+    // ---------- Clima e Trânsito ----------
     private fun blocked() = risks + closures
 
     private fun resetTraffic() {
@@ -235,32 +417,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun hasInternet(): Boolean {
-        val cm = getApplication<Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
-        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun shortReason(e: Throwable): String = when (e) {
-        is java.net.SocketTimeoutException -> "demorou para responder"
-        is java.net.UnknownHostException -> "servidor não encontrado"
+        is SocketTimeoutException -> "demorou para responder"
+        is UnknownHostException -> "sem conexão com o servidor"
         else -> e.message?.take(40) ?: e.javaClass.simpleName
     }
 
-    /** Confere na TomTom o caminho escolhido; se tiver via interditada, desvia sozinho. */
-    private fun checkTraffic(r: RouteResult, gen: Int) {
-        if (!com.motorota.data.Traffic.enabled) return
-        trafficJob?.cancel()
-        trafficStatus = "📡 Consultando o trânsito de agora…"
-        trafficJob = viewModelScope.launch {
-            val found = try {
-                com.motorota.data.Traffic.along(r)
-            } catch (e: kotlinx.coroutines.CancellationException) {
+    private fun checkWeather(r: RouteResult, gen: Int) {
+        weatherJob?.cancel()
+        weatherJob = viewModelScope.launch {
+            val w = try {
+                Weather.along(r)
+            } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                android.util.Log.w("MotoRota", "transito TomTom falhou: $e")
+                Log.w("MotoRota", "clima falhou: $e")
+                Weather.offline(r)
+            }
+            if (gen == generation) routeWeather = w
+        }
+    }
+
+    private fun checkTraffic(r: RouteResult, gen: Int) {
+        if (!Traffic.enabled) return
+        trafficJob?.cancel()
+        trafficStatus = "Consultando trânsito ao vivo…"
+        trafficJob = viewModelScope.launch {
+            val found = try {
+                Traffic.along(r)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w("MotoRota", "transito TomTom falhou: $e")
                 if (gen == generation) {
-                    trafficStatus = if (!hasInternet()) "📡 Sem internet: trânsito ao vivo não consultado"
-                    else "📡 Trânsito ao vivo indisponível agora (${shortReason(e)}). A rota segue normal."
+                    trafficStatus = if (!hasInternet()) "Offline · trânsito ao vivo indisponível"
+                    else "Trânsito indisponível (${shortReason(e)})"
                 }
                 return@launch
             }
@@ -274,8 +470,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     RiskArea(System.nanoTime(), it.point, 15, "Interditada (TomTom)", System.currentTimeMillis())
                 }
                 val onde = newClosures.firstOrNull { it.where.isNotBlank() }?.where?.let { " ($it)" } ?: ""
-                message = "⛔ Via interditada agora no caminho$onde. Recalculando para desviar…"
-                if (navigating) say("Via interditada à frente. Recalculando.")
+                message = "Via interditada no caminho$onde. Desviando…"
+                if (navigating) say("Via interditada à frente. Recalculando.", urgent = true)
                 if (navigating) myLocation?.let { reroute(it) } else recalc(fit = false)
                 return@launch
             }
@@ -283,144 +479,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val desvios = closures.size
             trafficStatus = when {
                 found.isEmpty() && desvios == 0 ->
-                    if (com.motorota.data.Traffic.partial) "✅ Trânsito agora: nada de anormal (parte da rota não foi consultada)"
-                    else "✅ Trânsito agora: nada de anormal no caminho"
+                    if (Traffic.partial) "Trânsito livre (consulta parcial)"
+                    else "Trânsito livre no trajeto"
                 else -> listOfNotNull(
-                    if (desvios > 0) "⛔ $desvios interdição(ões) evitada(s)" else null,
-                    if (found.isNotEmpty()) "${found.size} ocorrência(s) agora no caminho" else null,
+                    if (desvios > 0) "$desvios interdição(ões) evitada(s)" else null,
+                    if (found.isNotEmpty()) "${found.size} ocorrência(s) na via" else null,
                 ).joinToString(" · ")
             }
             if (navigating) currentRoute?.let { refreshAlertsAsync(it) }
         }
     }
-    private var routeJob: Job? = null
-    private var searchJob: Job? = null
-    private var navigator: Navigator? = null
-    private var offRouteCount = 0
 
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-
-    /** muda quando os radares terminam de carregar */
-    var radarsVersion by mutableStateOf(0); private set
-
-    init {
-        viewModelScope.launch {
-            delay(4000) // deixa o app abrir primeiro
-            update = com.motorota.data.Updater.check()
-        }
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            // primeiro as areas/trechos de risco (rapido e a rota depende deles), depois os radares
-            runCatching { com.motorota.data.KnownRisks.load(app) }
-                .onFailure { android.util.Log.w("MotoRota", "areas de risco: $it") }
-            runCatching { com.motorota.data.Corridors.load(app) }
-                .onFailure { android.util.Log.w("MotoRota", "trechos perigosos: $it") }
-            riskDataReady.complete(Unit)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { knownRisksVersion++ }
-            radarStore.load()
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { radarsVersion++ }
-        }
-        tts = TextToSpeech(app) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale("pt", "BR")
-                ttsReady = true
-            }
-        }
-    }
-
-    override fun onCleared() {
-        tts?.shutdown()
-    }
-
-    val currentRoute: RouteResult? get() = routes[mode]
-
-    // ---------- GPS ----------
-    private var lastGpsFix = 0L
-    private var lastFix: Pair<GeoPoint, Long>? = null
-    private var smoothSpeed = -1.0
-
-    fun onLocation(loc: Location) {
-        // posicao pela rede (menos precisa) so e usada enquanto o GPS nao responde
-        val now = System.currentTimeMillis()
-        if (loc.provider == "gps") lastGpsFix = now
-        else if (now - lastGpsFix < 15_000) return
-
-        val p = GeoPoint(loc.latitude, loc.longitude)
-        // alguns GPS nao informam velocidade/direcao: calcula pela posicao anterior
-        val prev = lastFix
-        val nowMs = android.os.SystemClock.elapsedRealtime()
-        val dt = prev?.let { (nowMs - it.second) / 1000.0 } ?: 0.0
-        val moved = prev?.first?.distanceTo(p) ?: 0.0
-        // acima de 90 m/s (~320 km/h) e salto de GPS, nao velocidade: descarta
-        val derived = (if (prev != null && dt in 0.3..10.0) moved / dt else -1.0).let { if (it > 90) -1.0 else it }
-        // usa a velocidade calculada pelas posicoes quando o GPS nao informa ou informa algo impossivel
-        val gpsSpeedBad = !loc.hasSpeed() || loc.speed > 90f ||
-            (loc.speed < 0.5f && derived > 3) ||
-            (derived >= 0 && kotlin.math.abs(loc.speed - derived) > 15)
-        if (derived >= 0 && gpsSpeedBad) {
-            // media movel para nao "pular" quando as posicoes chegam em intervalos irregulares
-            // uma moto nao ganha/perde mais que ~4 m/s (14 km/h) em um segundo: descarta saltos de GPS
-            val limited = if (smoothSpeed < 0) derived else derived.coerceIn(smoothSpeed - 4 * dt, smoothSpeed + 4 * dt)
-            smoothSpeed = if (smoothSpeed < 0) limited else smoothSpeed * 0.6 + limited * 0.4
-            loc.speed = smoothSpeed.toFloat()
-        }
-        if ((!loc.hasBearing() || loc.bearing == 0f) && prev != null && moved > 3) {
-            val k = Math.cos(Math.toRadians(p.lat))
-            loc.bearing = ((Math.toDegrees(Math.atan2((p.lon - prev.first.lon) * k, p.lat - prev.first.lat)) + 360) % 360).toFloat()
-        }
-        lastFix = p to nowMs
-        // distancia rodada: so conta trechos plausiveis (sem saltos de GPS) e com a moto andando
-        if (prev != null && dt in 0.3..10.0 && derived in 1.0..90.0 && moved < 900) {
-            addRiddenKm(moved / 1000.0)
-            if (navigating) {
-                tripDistM += moved
-                tripMovingS += dt
-            }
-        }
-        lastLocation = Location(loc).apply { if (speed < 1.5f || !hasBearing()) bearing = this@AppViewModel.bearing }
-        myLocation = p
-        if (loc.speed > 90f) loc.speed = 0f // valor impossivel e nada melhor para usar
-        speedKmh = if (loc.hasSpeed()) (loc.speed * 3.6f).toInt() else 0
-        if (BuildConfig.DEBUG) android.util.Log.d("MotoRotaGps", "prov=${loc.provider} hasSpeed=${loc.hasSpeed()} speed=${loc.speed} derived=$derived dt=$dt moved=$moved kmh=$speedKmh")
-        if (loc.hasBearing() && loc.speed > 1.5f) bearing = loc.bearing
-        if (navigating && speedKmh > tripMaxKmh && speedKmh < 320) tripMaxKmh = speedKmh
-
-        val nav = navigator ?: return
-        if (!navigating) return
-        val st = nav.update(p)
-        navState = st
-
-        // paradas alcancadas saem da lista (para o recalculo nao voltar nelas)
-        if (stops.isNotEmpty() && p.distanceTo(stops.first().point) < 100) {
-            stops = stops.drop(1)
-            say("Parada alcançada.")
-        }
-
-        if (st.arrived) {
-            say("Você chegou ao destino.")
-            stopNavigation(arrived = true)
-            return
-        }
-
-        nav.speechFor(st, loc.speed)?.let { say(it) }
-
-        // radares e alertas a frente
-        currentLimit = nav.limitAt(st.alongM)
-        val ahead = alongAlerts.firstOrNull { it.posM > st.alongM + 5 && it.posM - st.alongM < 2000 }
-        nextAlert = ahead?.let { it to (it.posM - st.alongM).coerceAtLeast(0.0) }
-        ahead?.let { a -> nav.alertSpeech(a, a.posM - st.alongM, loc.speed)?.let { say(it) } }
-
-        val limit = if (loc.hasAccuracy()) maxOf(50f, loc.accuracy * 1.5f) else 50f
-        if (st.offRouteM > limit) {
-            offRouteCount++
-            if (offRouteCount >= 3 && !rerouting) reroute(p)
-        } else {
-            offRouteCount = 0
-        }
-    }
-
-    // ---------- pontos da rota ----------
+    // ---------- Pontos da Rota ----------
     fun goTo(w: Waypoint) {
+        dismissMapTip()
         resetTraffic()
         destination = w
         searchResults = emptyList()
@@ -431,11 +503,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (destination == null) {
             goTo(w); return
         }
+        pushUndo()
         stops = stops + w
         recalc(fit = true)
     }
 
     fun removeStop(i: Int) {
+        if (i !in stops.indices) return
         pushUndo()
         stops = stops.filterIndexed { idx, _ -> idx != i }
         if (movingStop == i) movingStop = null
@@ -443,12 +517,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setOriginHere(w: Waypoint?) {
+        dismissMapTip()
         origin = w
+        if (destination != null) recalc(fit = true)
+    }
+
+    fun swapEndpoints() {
+        val dest = destination ?: return
+        val orig = origin ?: myLocation?.let { Waypoint(it, "Localização inicial") } ?: run {
+            message = "Sem sinal de GPS para inverter a rota."
+            return
+        }
+        pushUndo()
+        stops = stops.reversed()
+        origin = dest
+        destination = orig
+        resetTraffic()
         recalc(fit = true)
     }
 
     fun clearRoute() {
         stopNavigation()
+        pendingStart = false
         editMode = false
         movingStop = null
         undoStack.clear(); canUndo = false
@@ -463,19 +553,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectMode(m: Mode) {
+        if (mode == m) {
+            fitRequest++
+            return
+        }
         mode = m
-        if (routes[m] == null && routeErrors[m] == null && m !in calculating) recalc(fit = false)
+        val r = routes[m]
+        if (r != null) {
+            checkTraffic(r, generation)
+            checkWeather(r, generation)
+        } else if (routeErrors[m] == null && m !in calculating) {
+            recalc(fit = false)
+        }
         fitRequest++
     }
 
     private fun startPoint(): GeoPoint? = origin?.point ?: myLocation
 
-    /** Calcula o modo escolhido primeiro e depois os outros dois (para comparar). */
+    /** Calcula o modo escolhido primeiro e depois os outros dois para comparação. */
     fun recalc(fit: Boolean) {
         val dest = destination ?: return
         val start = startPoint()
         if (start == null) {
-            message = "Aguardando o GPS… ou toque e segure no mapa para escolher a partida."
+            pendingStart = false
+            message = "Aguardando GPS… ou toque e segure no mapa para escolher a partida."
             return
         }
         val pts = listOf(start) + stops.map { it.point } + dest.point
@@ -503,9 +604,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 } catch (e: RouteException) {
                     if (gen != generation) return@launch
+                    if (m == mode) pendingStart = false
                     routeErrors = routeErrors + (m to (e.message ?: "erro"))
                 } catch (e: Throwable) {
                     if (gen != generation) return@launch
+                    if (m == mode) pendingStart = false
                     routeErrors = routeErrors + (m to "Erro: ${e.message ?: e.javaClass.simpleName}")
                 }
                 calculating = calculating - m
@@ -513,37 +616,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- navegacao ----------
+    // ---------- Navegação ----------
     fun startNavigation() {
         val r = currentRoute ?: return
         if (r.points.size < 2) {
             message = "A partida e o destino são o mesmo lugar. Adicione uma parada ou escolha outro destino."
             return
         }
-        if (origin != null) {
-            message = "A navegação usa o GPS como partida. Recalculando a partir da sua posição…"
+        // Se havia partida manual longe do GPS atual, recalcula de verdade a partir do GPS antes de guiar
+        val customOrigin = origin
+        if (customOrigin != null) {
+            val gps = myLocation
+            if (gps == null) {
+                message = "Sem sinal de GPS para iniciar a navegação."
+                return
+            }
             origin = null
+            if (gps.distanceTo(customOrigin.point) > 80) {
+                pendingStart = true
+                message = "Recalculando a rota a partir do seu GPS atual…"
+                recalc(fit = false)
+                return
+            }
         }
+
         navigator = Navigator(r)
         alongAlerts = emptyList()
-        // radares/trechos ao longo da rota: calcula em segundo plano (nao trava o inicio)
-        viewModelScope.launch {
-            val a = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { alertsOn(r) }
-            if (navigator?.route === r) alongAlerts = a
-        }
+        refreshAlertsAsync(r)
+
         tripDistM = 0.0
         tripMaxKmh = 0
         tripMovingS = 0.0
-        tripStartMs = System.currentTimeMillis()
+        tripStartElapsedMs = SystemClock.elapsedRealtime()
+        gpsLost = false
         following = true
         navigating = true
         offRouteCount = 0
         myLocation?.let { navState = navigator?.update(it) }
-        say("Vamos lá. Rota ${r.mode.label.lowercase()}.")
+
+        NavigationService.start(
+            getApplication(),
+            "Rota ${r.mode.label}",
+            "Faltam ${formatDistance(r.distanceM.toDouble())} (${formatDuration(r.timeS)})",
+        )
+        say("Vamos lá. Rota ${r.mode.label.lowercase()}.", urgent = true)
     }
 
     fun stopNavigation(arrived: Boolean = false) {
-        // resumo da viagem (so se rodou alguma coisa)
         if (navigating && tripDistM > 300) {
             tripSummary = TripSummary(
                 distM = tripDistM,
@@ -554,18 +673,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 arrived = arrived,
             )
         }
+        pendingStart = false
         navigating = false
         navigator = null
         navState = null
         nextAlert = null
         currentLimit = null
         rerouting = false
+        gpsLost = false
+        NavigationService.stop(getApplication())
     }
 
     private fun reroute(from: GeoPoint) {
         val dest = destination ?: return
         rerouting = true
-        say("Recalculando.")
+        say("Recalculando.", urgent = true)
         val pts = listOf(from) + stops.map { it.point } + dest.point
         val m = mode
         viewModelScope.launch {
@@ -579,7 +701,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 checkTraffic(r, generation)
                 refreshAlertsAsync(r)
             } catch (e: Throwable) {
-                // pilotando: nada de instrucao comprida; tenta de novo nas proximas posicoes do GPS
                 message = if (navigating) "Procurando caminho a partir daqui…" else e.message
                 offRouteCount = 0
             } finally {
@@ -588,25 +709,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun say(text: String) {
+    fun say(text: String, urgent: Boolean = true) {
         if (!voiceOn || !ttsReady) return
-        // so a fala mais recente importa: nao acumula avisos velhos na fila
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, text.hashCode().toString())
+        val now = SystemClock.elapsedRealtime()
+        val queueMode = if (!urgent && now - lastUrgentSpeechMs < 4000) {
+            // Não corta uma instrução de curva recém-iniciada: coloca o alerta logo em seguida
+            TextToSpeech.QUEUE_ADD
+        } else {
+            if (urgent) lastUrgentSpeechMs = now
+            TextToSpeech.QUEUE_FLUSH
+        }
+        tts?.speak(text, queueMode, null, text.hashCode().toString())
     }
 
-    // ---------- busca ----------
+    // ---------- Busca ----------
     fun search(q: String) {
         searchJob?.cancel()
         if (q.trim().length < 3) {
             searchResults = emptyList(); return
         }
         searchJob = viewModelScope.launch {
-            delay(350)
+            delay(320)
             searching = true
             try {
                 searchResults = Geocoder.search(q, myLocation)
                 if (searchResults.isEmpty()) message = "Nada encontrado para \"$q\"."
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 message = "Sem internet para buscar. Toque e segure no mapa para marcar o destino."
             } finally {
                 searching = false
@@ -616,11 +744,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSearch() {
         searchJob?.cancel()
+        searching = false
         searchResults = emptyList()
     }
 
-    // ---------- areas de risco ----------
+    // ---------- Áreas de Risco e Alertas ----------
     fun addRisk(p: GeoPoint, radiusM: Int, label: String) {
+        dismissMapTip()
         risks = risks + RiskArea(System.currentTimeMillis(), p, radiusM, label, System.currentTimeMillis())
         riskStore.save(risks)
         message = "Área de risco marcada. As rotas vão desviar dela."
@@ -636,31 +766,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun riskNear(p: GeoPoint): RiskArea? =
         risks.filter { it.point.distanceTo(p) <= it.radiusM }.minByOrNull { it.point.distanceTo(p) }
 
-    // ---------- alertas tipo Waze ----------
-    fun addHazard(type: com.motorota.data.HazardType, p: GeoPoint) {
-        val h = com.motorota.data.Hazard(System.currentTimeMillis(), type, p, System.currentTimeMillis())
-        hazards = hazards + h
+    fun addHazard(type: HazardType, p: GeoPoint) {
+        dismissMapTip()
+        val now = System.currentTimeMillis()
+        val h = Hazard(now, type, p, now)
+        hazards = hazards.filter { it.expiresAt > now } + h
         hazardStore.save(hazards)
-        message = "${type.emoji} ${type.label} marcado. Vale por ${if (type.hoursValid >= 48) "${type.hoursValid / 24} dias" else "${type.hoursValid} h"}."
+        val validTxt = if (type.hoursValid >= 48) "${type.hoursValid / 24} dias" else "${type.hoursValid} h"
+        message = "${type.emoji} ${type.label} registrado (válido por $validTxt)."
         currentRoute?.let { if (navigating) refreshAlertsAsync(it) }
     }
 
     fun removeHazard(id: Long) {
         hazards = hazards.filter { it.id != id }
         hazardStore.save(hazards)
+        currentRoute?.let { if (navigating) refreshAlertsAsync(it) }
     }
 
-    fun hazardNear(p: GeoPoint): com.motorota.data.Hazard? =
-        hazards.filter { it.point.distanceTo(p) < 120 }.minByOrNull { it.point.distanceTo(p) }
+    fun hazardNear(p: GeoPoint): Hazard? =
+        hazards.filter { it.expiresAt > System.currentTimeMillis() && it.point.distanceTo(p) < 120 }
+            .minByOrNull { it.point.distanceTo(p) }
 
-    // ---------- edicao do caminho ----------
-    /** modo de edicao: cada toque no mapa vira um ponto de passagem */
+    // ---------- Edição Inteligente do Caminho ----------
     var editMode by mutableStateOf(false)
-    /** parada escolhida para mover (o proximo toque no mapa define o novo lugar) */
     var movingStop by mutableStateOf<Int?>(null)
     private val undoStack = ArrayList<List<Waypoint>>()
     var canUndo by mutableStateOf(false); private set
-    private var editJob: Job? = null
 
     private fun pushUndo() {
         undoStack.add(stops)
@@ -668,22 +799,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         canUndo = true
     }
 
-    /** recalcula pouco depois do ultimo toque (para nao recalcular a cada ponto) */
     private fun recalcSoon() {
         editJob?.cancel()
         editJob = viewModelScope.launch {
-            delay(if (editMode) 700 else 0)
+            delay(if (editMode) 650 else 0)
             recalc(fit = false)
         }
     }
 
-    /**
-     * Coloca o ponto na posicao da sequencia onde ele "faz mais sentido"
-     * (a que menos alonga o caminho), em vez de sempre no fim.
-     */
-    fun addViaSmart(p: GeoPoint) {
-        val dest = destination ?: run { goTo(Waypoint(p, "Destino")); return }
-        val start = startPoint() ?: run { addStop(Waypoint(p, "Ponto")); return }
+    /** Insere o ponto na posição da sequência que menos alonga o caminho. */
+    fun addViaSmart(p: GeoPoint, name: String = "Ponto de passagem") {
+        val dest = destination ?: run { goTo(Waypoint(p, if (name == "Ponto de passagem") "Destino" else name)); return }
+        val start = startPoint() ?: run { addStop(Waypoint(p, name)); return }
         pushUndo()
         val seq = listOf(start) + stops.map { it.point } + dest.point
         var best = 0
@@ -693,7 +820,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (c < bestCost) { bestCost = c; best = i }
         }
         val l = stops.toMutableList()
-        l.add(best, Waypoint(p, "Ponto de passagem"))
+        l.add(best, Waypoint(p, name))
         stops = l
         recalcSoon()
     }
@@ -703,6 +830,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo()
         stops = stops.toMutableList().also { it[i] = Waypoint(p, it[i].name) }
         movingStop = null
+        recalcSoon()
+    }
+
+    fun moveStopUp(i: Int) {
+        if (i <= 0 || i >= stops.size) return
+        pushUndo()
+        val l = stops.toMutableList()
+        val t = l[i]; l[i] = l[i - 1]; l[i - 1] = t
+        stops = l
         recalcSoon()
     }
 
@@ -723,7 +859,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         recalcSoon()
     }
 
-    /** Botao "Iniciar" da edicao: sai da edicao e comeca a navegar (espera o recalculo se precisar). */
     fun startFromEditing() {
         editMode = false
         movingStop = null
@@ -745,23 +880,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         recalc(fit = true)
     }
 
-    // ---------- passeio personalizado ----------
-    fun moveStopUp(i: Int) {
-        if (i <= 0 || i >= stops.size) return
-        val l = stops.toMutableList()
-        val t = l[i]; l[i] = l[i - 1]; l[i - 1] = t
-        pushUndo()
-        stops = l
-        recalcSoon()
-    }
-
-    /** Ida e volta: o destino vira parada e a rota termina onde comecou. */
+    // ---------- Passeios Salvos ----------
     fun makeRoundTrip() {
         val dest = destination ?: return
         val start = origin ?: myLocation?.let { Waypoint(it, "Início") }
         if (start == null) {
             message = "Aguardando o GPS para saber onde é o início."; return
         }
+        pushUndo()
         stops = stops + dest
         destination = Waypoint(start.point, "Volta: ${start.name}")
         recalc(fit = true)
@@ -769,12 +895,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun saveTrip(name: String) {
         val dest = destination ?: return
-        val t = com.motorota.data.SavedTrip(
+        val t = SavedTrip(
             id = System.currentTimeMillis(),
-            name = name.ifBlank { dest.name },
-            origin = origin?.let { com.motorota.data.SavedPoint(it.point, it.name) },
-            stops = stops.map { com.motorota.data.SavedPoint(it.point, it.name) },
-            destination = com.motorota.data.SavedPoint(dest.point, dest.name),
+            name = name.trim().ifBlank { dest.name },
+            origin = origin?.let { SavedPoint(it.point, it.name) },
+            stops = stops.map { SavedPoint(it.point, it.name) },
+            destination = SavedPoint(dest.point, dest.name),
             mode = mode.name,
         )
         trips = listOf(t) + trips
@@ -782,8 +908,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         message = "Passeio \"${t.name}\" salvo."
     }
 
-    fun loadTrip(t: com.motorota.data.SavedTrip) {
+    fun loadTrip(t: SavedTrip) {
         stopNavigation()
+        dismissMapTip()
+        resetTraffic()
         origin = t.origin?.let { Waypoint(it.point, it.name) }
         stops = t.stops.map { Waypoint(it.point, it.name) }
         destination = Waypoint(t.destination.point, t.destination.name)
@@ -796,19 +924,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tripStore.save(trips)
     }
 
-    /** radares e alertas em cima da rota escolhida (para o resumo antes de sair) */
-    /** recalcula os avisos ao longo da rota em segundo plano (sao contas pesadas em rota longa) */
     private fun refreshAlertsAsync(r: RouteResult) {
         viewModelScope.launch {
-            val a = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { alertsOn(r) }
+            val a = withContext(Dispatchers.Default) { alertsOn(r) }
             if (navigator?.route === r) alongAlerts = a
         }
     }
 
     fun alertsOn(r: RouteResult) =
-        com.motorota.nav.RouteAlerts.compute(r, radarStore, hazards, liveIncidents, known(), corridorHits(r))
+        RouteAlerts.compute(r, radarStore, hazards, liveIncidents, known(), corridorHits(r))
 
-    // ---------- mapas ----------
+    // ---------- Mapas Offline ----------
     var downloadProgress by mutableStateOf(MapDownloader.Progress(0, 0, 0, 0)); private set
     var mapsVersion by mutableStateOf(0); private set
     var hasMaps by mutableStateOf(engine.hasAnyMap()); private set
@@ -816,8 +942,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun pollDownloads() {
         val before = downloadProgress.pending
         downloadProgress = downloader.poll()
-        if (downloadProgress.failed > 0) message = "Alguns mapas falharam. Toque em baixar de novo para tentar outra vez."
-        if (before != downloadProgress.pending) mapsVersion++
-        hasMaps = engine.hasAnyMap()
+        if (downloadProgress.failed > 0) message = "Alguns mapas falharam. Toque em baixar novamente."
+        if (before != downloadProgress.pending) {
+            mapsVersion++
+            hasMaps = engine.hasAnyMap()
+            // Se acabou de baixar mapas e já tinha destino aguardando, recalcula sozinho!
+            if (downloadProgress.pending == 0 && hasMaps && destination != null && currentRoute == null && !navigating) {
+                recalc(fit = true)
+            }
+        } else {
+            hasMaps = engine.hasAnyMap()
+        }
+    }
+
+    companion object {
+        private const val LocationManagerProviderGps = "gps"
     }
 }

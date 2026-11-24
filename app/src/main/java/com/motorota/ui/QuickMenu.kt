@@ -15,8 +15,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.SatelliteAlt
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material.icons.rounded.ZoomOutMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,105 +39,178 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
 
 /**
- * Todas as funcoes do app que podem virar botao na tela.
- * Cada uma diz se faz sentido no mapa (planejando) e/ou na navegacao.
+ * Funções do app que podem ficar fixadas como atalho rápido na tela.
+ * Mapa (planejamento) e navegação mantêm listas independentes.
  */
-enum class QuickAction(val id: String, val emoji: String, val label: String, val inMap: Boolean, val inNav: Boolean) {
-    PASSEIOS("passeios", "⭐", "Meus passeios", true, false),
-    TEMA("tema", "🌙", "Tema dia / noite", true, true),
-    SATELITE("satelite", "🛰️", "Satélite", true, true),
-    AVISAR("avisar", "⚠️", "Avisar (buraco, polícia…)", false, true),
-    VOZ("voz", "🔊", "Voz liga / desliga", true, true),
-    ABASTECI("abasteci", "⛽", "Abasteci", true, true),
-    GERAL("geral", "🗺️", "Ver a rota toda (Geral)", false, true),
-    MAPAS("mapas", "⬇️", "Baixar mapas", true, false),
-    AJUSTES("ajustes", "⚙️", "Ajustes da moto", true, true),
-    SAIR("sair", "🛑", "Sair da navegação", false, true),
+enum class QuickAction(val id: String, val label: String, val inMap: Boolean, val inNav: Boolean) {
+    PASSEIOS("passeios", "Meus passeios", true, false),
+    TEMA("tema", "Tema dia / noite", true, true),
+    SATELITE("satelite", "Imagem de satélite", true, true),
+    AVISAR("avisar", "Reportar alerta na via", true, true),
+    VOZ("voz", "Avisos por voz", true, true),
+    ABASTECI("abasteci", "Registrar abastecimento", true, true),
+    GERAL("geral", "Visão geral da rota", false, true),
+    MAPAS("mapas", "Mapas offline", true, false),
+    AJUSTES("ajustes", "Ajustes da moto", true, true),
+    SAIR("sair", "Encerrar navegação", false, true),
     ;
 
     fun available(nav: Boolean) = if (nav) inNav else inMap
 
     companion object {
-        /** botoes que ja vem na tela na primeira vez */
         val DEFAULT_MAP = setOf(PASSEIOS.id, TEMA.id, SATELITE.id)
         val DEFAULT_NAV = setOf(AVISAR.id, VOZ.id)
     }
 }
 
-/** Emoji que mostra o estado atual (ex.: tema mostra sol/lua, voz mostra mudo) */
-fun QuickAction.icon(vm: AppViewModel): String = when (this) {
-    QuickAction.TEMA -> if (vm.night) "☀️" else "🌙"
-    QuickAction.VOZ -> if (vm.voiceOn) "🔊" else "🔇"
-    else -> emoji
+fun QuickAction.vectorIcon(vm: AppViewModel): ImageVector = when (this) {
+    QuickAction.PASSEIOS -> Icons.Rounded.Star
+    QuickAction.TEMA -> if (vm.night) Icons.Rounded.LightMode else Icons.Rounded.DarkMode
+    QuickAction.SATELITE -> Icons.Rounded.SatelliteAlt
+    QuickAction.AVISAR -> Icons.Rounded.WarningAmber
+    QuickAction.VOZ -> if (vm.voiceOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff
+    QuickAction.ABASTECI -> Icons.Rounded.LocalGasStation
+    QuickAction.GERAL -> Icons.Rounded.ZoomOutMap
+    QuickAction.MAPAS -> Icons.Rounded.Download
+    QuickAction.AJUSTES -> Icons.Rounded.Tune
+    QuickAction.SAIR -> Icons.Rounded.Close
 }
 
-/** Botoes fixados na tela (coluna da direita) */
+fun QuickAction.iconTint(vm: AppViewModel): Color = when (this) {
+    QuickAction.AVISAR -> WarningColor
+    QuickAction.SAIR -> Danger
+    QuickAction.VOZ -> if (vm.voiceOn) Color.White else TextDim
+    QuickAction.TEMA -> if (vm.night) Color(0xFFFDE047) else Color.White
+    else -> Color.White
+}
+
+/** Coluna de atalhos fixados na lateral direita, limitada para nunca estourar a tela. */
 @Composable
-fun PinnedButtons(vm: AppViewModel, nav: Boolean, onAction: (QuickAction) -> Unit) {
+fun PinnedButtons(
+    vm: AppViewModel,
+    nav: Boolean,
+    maxVisible: Int = 4,
+    buttonSize: Dp = 50.dp,
+    onAction: (QuickAction) -> Unit,
+) {
     val pinned = vm.pinned(nav)
-    QuickAction.entries.filter { it.available(nav) && it.id in pinned }.forEach { a ->
-        RoundButton(onClick = { onAction(a) }, highlight = a == QuickAction.SATELITE && vm.satellite) {
-            Text(a.icon(vm), fontSize = 22.sp)
-        }
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        QuickAction.entries
+            .filter { it.available(nav) && it.id in pinned }
+            .take(maxVisible)
+            .forEach { a ->
+                val active = a == QuickAction.SATELITE && vm.satellite
+                RoundButton(
+                    onClick = { onAction(a) },
+                    highlight = active,
+                    size = buttonSize,
+                ) {
+                    Icon(
+                        imageVector = a.vectorIcon(vm),
+                        contentDescription = a.label,
+                        tint = if (active) Color.White else a.iconTint(vm),
+                        modifier = Modifier.size(23.dp),
+                    )
+                }
+            }
     }
 }
 
-/**
- * Menu completo (botao ☰). Tocar no nome = usar a funcao.
- * Tocar no 📌 = deixar (ou tirar) o botao fixo na tela. Mapa e navegacao tem botoes separados.
- */
+/** Menu completo com opção de fixar/desafixar cada ação na tela. */
 @Composable
-fun QuickMenuDialog(vm: AppViewModel, nav: Boolean, onAction: (QuickAction) -> Unit, onDismiss: () -> Unit) {
+fun QuickMenuDialog(
+    vm: AppViewModel,
+    nav: Boolean,
+    onAction: (QuickAction) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val pinned = vm.pinned(nav)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
+        containerColor = Color(0xFF161B22),
         title = {
             Column {
-                Text("☰ Menu", color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Menu rápido", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 Text(
-                    "Toque no 📌 para deixar o botão na tela " + if (nav) "durante a navegação." else "do mapa.",
-                    color = TextDim, fontSize = 13.sp,
+                    "Toque no alfinete para fixar atalhos " + if (nav) "na navegação." else "no mapa.",
+                    color = TextDim,
+                    fontSize = 13.sp,
                 )
             }
         },
         text = {
-            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
-                // navegando, "Sair" fica no topo do menu
-                QuickAction.entries.filter { it.available(nav) }
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+                QuickAction.entries
+                    .filter { it.available(nav) }
                     .sortedBy { if (nav && it == QuickAction.SAIR) 0 else 1 }
                     .forEachIndexed { i, a ->
-                    if (i > 0) HorizontalDivider(color = PanelBorder)
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        if (i > 0) HorizontalDivider(color = PanelBorder.copy(alpha = 0.6f))
                         Row(
-                            Modifier.weight(1f).clickable { onAction(a); onDismiss() }.padding(vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                         ) {
-                            Text(a.icon(vm), fontSize = 24.sp)
-                            Spacer(Modifier.width(14.dp))
-                            Text(
-                                a.label, fontSize = 17.sp,
-                                color = if (a == QuickAction.SAIR) Danger else Color.White,
-                                fontWeight = if (a == QuickAction.SAIR) FontWeight.Bold else FontWeight.Normal,
-                            )
+                            Row(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onAction(a); onDismiss() }
+                                    .padding(vertical = 12.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = a.vectorIcon(vm),
+                                    contentDescription = null,
+                                    tint = a.iconTint(vm),
+                                    modifier = Modifier.size(24.dp),
+                                )
+                                Spacer(Modifier.width(14.dp))
+                                Column {
+                                    Text(
+                                        a.label,
+                                        fontSize = 16.sp,
+                                        color = if (a == QuickAction.SAIR) Danger else Color.White,
+                                        fontWeight = if (a == QuickAction.SAIR) FontWeight.Bold else FontWeight.Medium,
+                                    )
+                                    val sub = when (a) {
+                                        QuickAction.VOZ -> if (vm.voiceOn) "Ativado" else "Silenciado"
+                                        QuickAction.SATELITE -> if (vm.satellite) "Ativado" else "Mapa padrão"
+                                        QuickAction.TEMA -> if (vm.night) "Modo noturno" else "Modo diurno"
+                                        else -> null
+                                    }
+                                    if (sub != null) Text(sub, fontSize = 12.sp, color = TextDim)
+                                }
+                            }
+                            val on = a.id in pinned
+                            Box(
+                                Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (on) Blue else SurfaceCard)
+                                    .clickable { vm.togglePin(nav, a.id) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Rounded.PushPin,
+                                    contentDescription = if (on) "Desafixar" else "Fixar",
+                                    tint = if (on) Color.White else TextDim,
+                                    modifier = Modifier.size(19.dp),
+                                )
+                            }
                         }
-                        val on = a.id in pinned
-                        Box(
-                            Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-                                .background(if (on) Color(0xFF1A73E8) else Color(0xFF2A3036))
-                                .clickable { vm.togglePin(nav, a.id) },
-                            contentAlignment = Alignment.Center,
-                        ) { Text("📌", fontSize = 20.sp, color = if (on) Color.White else TextDim) }
                     }
-                }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar", fontSize = 16.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar", fontSize = 15.sp) } },
     )
 }

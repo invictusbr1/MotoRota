@@ -1,19 +1,49 @@
 package com.motorota.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.OpenWith
+import androidx.compose.material.icons.rounded.Place
+import androidx.compose.material.icons.rounded.ReportProblem
+import androidx.compose.material.icons.rounded.Route
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SportsMotorsports
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,61 +53,126 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
+import com.motorota.R
+import com.motorota.data.Corridors
+import com.motorota.data.HazardType
+import com.motorota.data.KnownRisks
 import com.motorota.data.MapPacks
 import com.motorota.routing.GeoPoint
 import com.motorota.routing.Waypoint
+import com.motorota.routing.formatDistance
+import com.motorota.routing.formatDuration
 import java.util.Locale
 
+private val DialogBg = Color(0xFF161B22)
+
 @Composable
-private fun BigButton(text: String, color: Color = Color(0xFF2A3036), textColor: Color = Color.White, onClick: () -> Unit) {
+private fun ActionRowButton(
+    icon: ImageVector,
+    text: String,
+    containerColor: Color = SurfaceCard,
+    contentColor: Color = Color.White,
+    iconTint: Color = contentColor,
+    onClick: () -> Unit,
+) {
     Button(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(58.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = textColor),
-    ) { Text(text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor, contentColor = contentColor),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 @Composable
 fun LongPressDialog(vm: AppViewModel, p: GeoPoint, onReport: () -> Unit, onDismiss: () -> Unit) {
     var askRadius by remember { mutableStateOf(false) }
     val near = vm.riskNear(p)
-    val name = String.format(Locale.US, "%.5f, %.5f", p.lat, p.lon)
+    val coords = String.format(Locale.US, "%.5f, %.5f", p.lat, p.lon)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text(if (askRadius) "Tamanho da área de risco" else "O que fazer aqui?", color = Color.White) },
+        containerColor = DialogBg,
+        title = {
+            Column {
+                Text(
+                    if (askRadius) "Raio da área de risco" else "Ponto selecionado",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(coords, color = TextDim, fontSize = 12.sp)
+            }
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!askRadius) {
-                    BigButton("🏁  Ir para cá", color = Color(0xFF26C281), textColor = Color.Black) {
-                        vm.goTo(Waypoint(p, "Ponto no mapa")); onDismiss()
+                    ActionRowButton(
+                        icon = Icons.Rounded.Flag,
+                        text = "Ir para cá",
+                        containerColor = NavGreen,
+                        contentColor = Color(0xFF042617),
+                    ) {
+                        vm.goTo(Waypoint(p, "Ponto no mapa ($coords)")); onDismiss()
                     }
-                    if (vm.destination != null) BigButton("📍  Passar por aqui") {
-                        vm.addViaSmart(p); onDismiss()
+                    if (vm.destination != null) {
+                        ActionRowButton(icon = Icons.Rounded.Place, text = "Passar por aqui", iconTint = Color(0xFF60A5FA)) {
+                            vm.addViaSmart(p, "Parada no mapa"); onDismiss()
+                        }
                     }
-                    BigButton("🚩  Sair daqui (partida)") {
-                        vm.setOriginHere(Waypoint(p, "Partida: $name")); onDismiss()
+                    ActionRowButton(icon = Icons.Rounded.MyLocation, text = "Sair daqui (definir partida)", iconTint = NavGreen) {
+                        vm.setOriginHere(Waypoint(p, "Partida ($coords)")); onDismiss()
                     }
-                    BigButton("🕳️  Avisar: buraco, polícia, obra…", color = Color(0xFFE65100)) { onDismiss(); onReport() }
-                    BigButton("⛔  Marcar área de risco", color = Danger) { askRadius = true }
+                    ActionRowButton(
+                        icon = Icons.Rounded.ReportProblem,
+                        text = "Avisar: buraco, polícia, obra…",
+                        containerColor = Color(0xFF7C2D12),
+                        iconTint = Color(0xFFFDBA74),
+                    ) {
+                        onDismiss(); onReport()
+                    }
+                    ActionRowButton(
+                        icon = Icons.Rounded.Block,
+                        text = "Marcar área de risco",
+                        containerColor = Color(0xFF7F1D1D),
+                        iconTint = Color(0xFFFCA5A5),
+                    ) {
+                        askRadius = true
+                    }
                     vm.hazardNear(p)?.let { h ->
-                        BigButton("🗑  Remover aviso: ${h.type.label}") { vm.removeHazard(h.id); onDismiss() }
+                        ActionRowButton(icon = Icons.Rounded.DeleteOutline, text = "Remover aviso: ${h.type.label}") {
+                            vm.removeHazard(h.id); onDismiss()
+                        }
                     }
-                    if (near != null) BigButton("🗑  Remover esta área de risco") {
-                        vm.removeRisk(near.id); onDismiss()
+                    if (near != null) {
+                        ActionRowButton(icon = Icons.Rounded.DeleteOutline, text = "Remover esta área de risco") {
+                            vm.removeRisk(near.id); onDismiss()
+                        }
                     }
                 } else {
-                    Text("A rota nunca vai passar por dentro dessa área.", color = Color(0xFF9AA3AB))
-                    listOf(300 to "Pequena — 300 m (uma rua, um trecho)",
-                        800 to "Média — 800 m (um bairro pequeno)",
-                        2000 to "Grande — 2 km (uma região)").forEach { (r, label) ->
-                        BigButton(label) { vm.addRisk(p, r, "Área de risco"); onDismiss() }
+                    Text("As rotas nunca atravessarão o círculo demarcado.", color = TextDim, fontSize = 13.sp)
+                    listOf(
+                        300 to "Pequena — 300 m (quarteirão / rua)",
+                        800 to "Média — 800 m (bairro compacto)",
+                        2000 to "Grande — 2 km (região inteira)",
+                    ).forEach { (r, label) ->
+                        ActionRowButton(icon = Icons.Rounded.Block, text = label, iconTint = Danger) {
+                            vm.addRisk(p, r, "Área de risco"); onDismiss()
+                        }
                     }
                 }
             }
@@ -90,59 +185,115 @@ fun LongPressDialog(vm: AppViewModel, p: GeoPoint, onReport: () -> Unit, onDismi
 @Composable
 fun DownloadDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     val prog = vm.downloadProgress
-    @Suppress("UNUSED_VARIABLE") val refresh = vm.mapsVersion // recompõe quando um mapa termina
+    @Suppress("UNUSED_VARIABLE") val refresh = vm.mapsVersion
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text("Mapas de rota (offline)", color = Color.White) },
+        containerColor = DialogBg,
+        title = { Text("Mapas offline de rota", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
-                    "Baixe uma vez (de preferência no Wi-Fi). Depois as rotas são calculadas sem internet. " +
-                        "O download continua mesmo se você sair do app.",
-                    color = Color(0xFF9AA3AB), fontSize = 14.sp,
+                    "Baixe uma vez no Wi-Fi para calcular e recalcular rotas 100% sem internet. " +
+                        "O download continua em segundo plano.",
+                    color = TextDim,
+                    fontSize = 13.5.sp,
                 )
                 if (prog.pending > 0) {
-                    val frac = if (prog.bytesTotal > 0) prog.bytesDone.toFloat() / prog.bytesTotal else 0f
-                    Text("Baixando ${prog.pending} arquivo(s)… ${prog.bytesDone / 1_048_576} MB", color = Amber)
-                    LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth())
+                    val frac = if (prog.bytesTotal > 0) (prog.bytesDone.toFloat() / prog.bytesTotal).coerceIn(0f, 1f) else 0f
+                    Surface(color = SurfaceCard, shape = RoundedCornerShape(12.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "Baixando ${prog.pending} bloco(s)… ${prog.bytesDone / 1_048_576} MB",
+                                color = Color(0xFF60A5FA),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            if (prog.bytesTotal > 0) {
+                                LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth())
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
                 }
+
                 MapPacks.countries.forEach { c ->
                     val have = vm.downloader.installedCount(c)
                     val complete = have == c.tiles.size
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("${c.flag} ${c.name}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                if (complete) "✅ instalado" else "${c.sizeMb} MB · $have/${c.tiles.size} partes",
-                                color = Color(0xFF9AA3AB), fontSize = 13.sp,
-                            )
-                        }
-                        if (!complete) OutlinedButton(onClick = { vm.downloader.download(c.tiles); vm.pollDownloads() }) {
-                            Text("Baixar")
+                    Surface(
+                        color = SurfaceCard,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(12.dp)),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("${c.flag} ${c.name}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (complete) "Instalado (${c.sizeMb} MB)" else "${c.sizeMb} MB · $have/${c.tiles.size} partes",
+                                    color = if (complete) NavGreen else TextDim,
+                                    fontSize = 12.5.sp,
+                                )
+                            }
+                            if (!complete) {
+                                OutlinedButton(
+                                    onClick = { vm.downloader.download(c.tiles); vm.pollDownloads() },
+                                    shape = RoundedCornerShape(10.dp),
+                                ) { Text("Baixar") }
+                            } else {
+                                Icon(Icons.Rounded.CheckCircle, null, tint = NavGreen, modifier = Modifier.size(22.dp))
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = {
+                                        val keep = MapPacks.countries
+                                            .filter { it != c && vm.downloader.installedCount(it) > 0 }
+                                            .flatMap { it.tiles }
+                                            .toSet()
+                                        vm.downloader.deleteCountry(c, keep)
+                                        vm.pollDownloads()
+                                    },
+                                    modifier = Modifier.size(34.dp),
+                                ) {
+                                    Icon(Icons.Rounded.DeleteOutline, "Remover mapa", tint = TextDim, modifier = Modifier.size(18.dp))
+                                }
+                            }
                         }
                     }
                 }
-                Spacer(Modifier.height(4.dp))
+
                 val all = MapPacks.countries.flatMap { it.tiles }.distinct()
                 if (all.any { !vm.downloader.isInstalled(it) }) {
-                    BigButton("⬇  Baixar os 4 países (~625 MB)", color = Blue, textColor = Color.White) {
-                        vm.downloader.download(all); vm.pollDownloads()
+                    Button(
+                        onClick = { vm.downloader.download(all); vm.pollDownloads() },
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Blue, contentColor = Color.White),
+                    ) {
+                        Text("Baixar todos os países (~625 MB)", fontWeight = FontWeight.Bold)
                     }
                 }
+
+                HorizontalDivider(color = PanelBorder)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.foundation.Image(
-                        painter = androidx.compose.ui.res.painterResource(com.motorota.R.drawable.ic_launcher_fg),
+                    Image(
+                        painter = painterResource(R.drawable.ic_launcher_fg),
                         contentDescription = null,
-                        modifier = Modifier.height(28.dp),
+                        modifier = Modifier.height(26.dp),
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text("  MotoRota · um app do Grupo Conecta", color = Color(0xFF22D3EE), fontSize = 13.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("MotoRota · Grupo Conecta", color = Color(0xFF22D3EE), fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
                 }
                 Text(
-                    "Dados: © colaboradores do OpenStreetMap, processados pelo BRouter (brouter.de).",
-                    color = Color(0xFF6C757D), fontSize = 11.sp,
+                    "Dados © colaboradores do OpenStreetMap · motor BRouter.",
+                    color = TextDim,
+                    fontSize = 11.sp,
                 )
             }
         },
@@ -150,26 +301,27 @@ fun DownloadDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     )
 }
 
-
 @Composable
 fun HazardDialog(vm: AppViewModel, p: GeoPoint, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text("Avisar o quê?", color = Color.White) },
+        containerColor = DialogBg,
+        title = { Text("Reportar alerta na via", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                com.motorota.data.HazardType.entries.chunked(2).forEach { row ->
+                HazardType.entries.chunked(2).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         row.forEach { t ->
                             Button(
                                 onClick = { vm.addHazard(t, p); onDismiss() },
-                                modifier = Modifier.weight(1f).height(72.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3036), contentColor = Color.White),
+                                modifier = Modifier.weight(1f).height(68.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard, contentColor = Color.White),
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(t.emoji, fontSize = 24.sp)
-                                    Text(t.label, fontSize = 13.sp, maxLines = 1)
+                                    Text(t.emoji, fontSize = 22.sp)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(t.label, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
@@ -187,32 +339,62 @@ fun HazardDialog(vm: AppViewModel, p: GeoPoint, onDismiss: () -> Unit) {
 fun TripsDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text("⭐ Meus passeios", color = Color.White) },
+        containerColor = DialogBg,
+        title = { Text("Meus passeios salvos", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (vm.trips.isEmpty()) {
                     Text(
-                        "Nenhum passeio salvo ainda. Monte uma rota com as paradas que quiser e toque em \"💾 Salvar passeio\".",
-                        color = Color(0xFF9AA3AB),
+                        "Nenhum passeio salvo ainda. Monte uma rota com paradas e toque em \"Salvar passeio\".",
+                        color = TextDim,
+                        fontSize = 14.sp,
                     )
                 }
                 vm.trips.forEach { t ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(
-                            onClick = { vm.loadTrip(t); onDismiss() },
-                            modifier = Modifier.weight(1f).height(64.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A3036), contentColor = Color.White),
+                    Surface(
+                        color = SurfaceCard,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Text(t.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                Text(
-                                    "${t.stops.size} parada(s) · ${t.destination.name}",
-                                    fontSize = 12.sp, color = Color(0xFF9AA3AB), maxLines = 1,
-                                )
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp)),
+                            ) {
+                                TextButton(
+                                    onClick = { vm.loadTrip(t); onDismiss() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text(
+                                            t.name,
+                                            fontSize = 15.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            "${t.stops.size} parada(s) · ${t.destination.name}",
+                                            fontSize = 12.sp,
+                                            color = TextDim,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                            IconButton(onClick = { vm.deleteTrip(t.id) }) {
+                                Icon(Icons.Rounded.DeleteOutline, "Excluir passeio", tint = TextDim)
                             }
                         }
-                        TextButton(onClick = { vm.deleteTrip(t.id) }) { Text("🗑") }
                     }
                 }
             }
@@ -226,14 +408,15 @@ fun SaveTripDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf(vm.destination?.name ?: "") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text("💾 Salvar passeio", color = Color.White) },
+        containerColor = DialogBg,
+        title = { Text("Salvar passeio", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
-            androidx.compose.material3.OutlinedTextField(
+            OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Nome do passeio") },
+                label = { Text("Nome do roteiro") },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
@@ -243,20 +426,165 @@ fun SaveTripDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     )
 }
 
-
 @Composable
 fun StopActionDialog(vm: AppViewModel, i: Int, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1E22),
-        title = { Text("Ponto ${i + 1}", color = Color.White) },
+        containerColor = DialogBg,
+        title = { Text("Parada ${i + 1}", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                BigButton("✋  Mover este ponto") { vm.movingStop = i; onDismiss() }
-                BigButton("🗑  Remover este ponto", color = Danger) { vm.removeStop(i); onDismiss() }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ActionRowButton(icon = Icons.Rounded.OpenWith, text = "Mover este ponto") {
+                    vm.movingStop = i; onDismiss()
+                }
+                ActionRowButton(
+                    icon = Icons.Rounded.DeleteOutline,
+                    text = "Remover este ponto",
+                    containerColor = Color(0xFF7F1D1D),
+                    iconTint = Color(0xFFFCA5A5),
+                ) {
+                    vm.removeStop(i); onDismiss()
+                }
             }
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
+}
+
+/** Resumo exibido ao concluir ou encerrar uma viagem. */
+@Composable
+fun TripSummaryDialog(s: AppViewModel.TripSummary, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DialogBg,
+        title = {
+            Text(
+                if (s.arrived) "Chegamos ao destino!" else "Resumo da viagem",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Surface(
+                color = SurfaceCard,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SummaryMetricRow(Icons.Rounded.Route, "Distância percorrida", formatDistance(s.distM))
+                    SummaryMetricRow(Icons.Rounded.Schedule, "Tempo total", formatDuration(s.timeS.toInt()))
+                    SummaryMetricRow(Icons.Rounded.SportsMotorsports, "Em movimento", formatDuration(s.movingS.toInt()))
+                    SummaryMetricRow(Icons.Rounded.Speed, "Velocidade média", "${s.avgKmh} km/h")
+                    SummaryMetricRow(Icons.AutoMirrored.Rounded.TrendingUp, "Velocidade máxima", "${s.maxKmh} km/h")
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
+@Composable
+private fun SummaryMetricRow(icon: ImageVector, label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = Color(0xFF60A5FA), modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(label, color = TextDim, fontSize = 14.5.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** Ajustes gerais: autonomia do tanque e proteção em áreas de risco conhecidas. */
+@Composable
+fun SettingsDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+    var tankText by remember { mutableStateOf(if (vm.tankKm > 0) vm.tankKm.toString() else "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DialogBg,
+        title = { Text("Ajustes da moto", color = Color.White, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.LocalGasStation, null, tint = Color(0xFF60A5FA), modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Autonomia do tanque", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text(
+                            "Informe quantos km sua moto faz por tanque para acompanhar o consumo pelo GPS e receber alertas de reserva.",
+                            color = TextDim,
+                            fontSize = 12.5.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = tankText,
+                                onValueChange = { t -> tankText = t.filter { it.isDigit() }.take(4) },
+                                label = { Text("km por tanque") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { vm.setTank(tankText.toIntOrNull() ?: 0) }) { Text("Salvar") }
+                        }
+                        if (vm.tankKm > 0) {
+                            Text(
+                                "Rodados: ${vm.kmSinceFill.toInt()} km · Restam ~${(vm.fuelLeftKm ?: 0).coerceAtLeast(0)} km",
+                                color = TextDim,
+                                fontSize = 12.5.sp,
+                            )
+                            Button(
+                                onClick = { vm.refuel() },
+                                modifier = Modifier.fillMaxWidth().height(46.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = NavGreen, contentColor = Color(0xFF042617)),
+                            ) {
+                                Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                ) {
+                    Row(
+                        Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Shield, null, tint = NavGreen, modifier = Modifier.size(19.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Áreas de risco conhecidas", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            val n = KnownRisks.all
+                            Text(
+                                "Desvia de ruas internas em ${n.count { it.avoid }} áreas críticas, monitora " +
+                                    "${Corridors.all.size} corredores expressos e prioriza contornos rodoviários seguros " +
+                                    "(com peso reforçado à noite e fins de semana).",
+                                color = TextDim,
+                                fontSize = 12.5.sp,
+                                lineHeight = 17.sp,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(checked = vm.knownRisksOn, onCheckedChange = { vm.toggleKnownRisks() })
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar", fontSize = 15.sp) } },
     )
 }

@@ -7,7 +7,6 @@ captures/
 .kotlin/
 MotoRota.apk
 keystore/
-MotoRota.apk
 
 publicar-github.*
 enviar-para-github.*

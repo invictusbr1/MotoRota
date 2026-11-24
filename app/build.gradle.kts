@@ -23,8 +23,9 @@ android {
             rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
         }
         val tomtomKey = System.getenv("TOMTOM_KEY") ?: localProps.getProperty("tomtom.key") ?: ""
+        val githubRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "invictusbr1/MotoRota"
         buildConfigField("String", "TOMTOM_KEY", "\"" + tomtomKey + "\"")
-        buildConfigField("String", "GITHUB_REPO", "\"" + (System.getenv("GITHUB_REPOSITORY") ?: "") + "\"")
+        buildConfigField("String", "GITHUB_REPO", "\"" + githubRepo + "\"")
         ndk { abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a,armeabi-v7a").split(",") }
     }
 

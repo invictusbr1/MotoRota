@@ -1,19 +1,33 @@
 package com.motorota.ui
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import com.motorota.data.Corridor
+import com.motorota.data.Hazard
+import com.motorota.data.HazardType
+import com.motorota.data.KnownRisk
+import com.motorota.data.Radar
 import com.motorota.routing.GeoPoint
 import com.motorota.routing.Mode
 import com.motorota.routing.RiskArea
 import com.motorota.routing.RouteResult
 import com.motorota.routing.Waypoint
+import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.BackgroundLayer
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.Layer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.layers.SymbolLayer
-import org.maplibre.android.maps.Style
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.RasterSource
+import org.maplibre.android.style.sources.TileSet
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
@@ -22,7 +36,7 @@ import org.maplibre.geojson.Polygon
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Camadas desenhadas por cima do mapa: rotas, areas de risco e paradas. */
+/** Camadas desenhadas sobre o mapa: rotas, áreas de risco, radares e paradas. */
 object MapLayers {
     const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
@@ -37,14 +51,15 @@ object MapLayers {
     private const val LAYER_SAT = "mr-sat-layer"
     private const val SAT_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg"
 
-    /** liga/desliga a imagem de satelite (estradas e nomes continuam por cima) */
+    /** Liga/desliga a imagem de satélite mantendo as vias legíveis por cima. */
     fun setSatellite(style: Style, on: Boolean) {
-        style.getLayer(LAYER_SAT)?.setProperties(PropertyFactory.visibility(if (on) Property.VISIBLE else Property.NONE))
+        style.getLayer(LAYER_SAT)?.setProperties(
+            PropertyFactory.visibility(if (on) Property.VISIBLE else Property.NONE)
+        )
         for (layer in style.layers) {
             val id = layer.id
             if (id.startsWith("mr-")) continue
             if (layer is LineLayer && (id.startsWith("road_") || id.startsWith("bridge_") || id.startsWith("tunnel_"))) {
-                // no satelite as ruas ficam meio transparentes para ver a foto
                 layer.setProperties(PropertyFactory.lineOpacity(if (on) 0.55f else 1f))
             }
         }
@@ -57,7 +72,7 @@ object MapLayers {
         "road_shield_us", "highway-shield-us",
     )
 
-    private class Theme(
+    private class MapPalette(
         val bg: String, val water: String, val park: String,
         val minor: String, val minorCase: String,
         val secondary: String, val secondaryCase: String,
@@ -66,48 +81,48 @@ object MapLayers {
         val text: String, val halo: String,
     )
 
-    // Paletas simples, no estilo do Google Maps: estradas brancas/cinza, sem amarelo.
-    private val DAY = Theme(
-        bg = "#F1F3F4", water = "#AADAFF", park = "#DCEFD9",
-        minor = "#FFFFFF", minorCase = "#E1E3E6",
-        secondary = "#FFFFFF", secondaryCase = "#CDD1D5",
-        primary = "#FFFFFF", primaryCase = "#BDC1C6",
-        motorway = "#FFFFFF", motorwayCase = "#9AA0A6",
-        text = "#5F6368", halo = "#FFFFFF",
+    private val DAY = MapPalette(
+        bg = "#EEF1F4", water = "#A6D5FA", park = "#DCEFD9",
+        minor = "#FFFFFF", minorCase = "#DFE3E8",
+        secondary = "#FFFFFF", secondaryCase = "#CBD0D6",
+        primary = "#FFFFFF", primaryCase = "#B8BFC7",
+        motorway = "#FFFFFF", motorwayCase = "#959EA8",
+        text = "#4A5056", halo = "#FFFFFF",
     )
-    private val NIGHT = Theme(
-        bg = "#1F2630", water = "#0F1A25", park = "#1D2A26",
-        minor = "#353E4A", minorCase = "#1A2029",
-        secondary = "#434D5A", secondaryCase = "#1A2029",
-        primary = "#525D6B", primaryCase = "#1A2029",
-        motorway = "#66727F", motorwayCase = "#1A2029",
-        text = "#9AA4B1", halo = "#161B22",
+    private val NIGHT = MapPalette(
+        bg = "#161B22", water = "#0D1620", park = "#16221E",
+        minor = "#28303B", minorCase = "#141920",
+        secondary = "#343E4B", secondaryCase = "#141920",
+        primary = "#434F5E", primaryCase = "#141920",
+        motorway = "#566475", motorwayCase = "#141920",
+        text = "#9AA4B2", halo = "#12161C",
     )
 
     const val ROUTE_BLUE = "#1A73E8"
     private const val ROUTE_BLUE_NIGHT = "#4C8DF6"
 
-    /** Deixa o mapa "limpo", so com as estradas em destaque (estilo navegador). */
+    /** Deixa o mapa limpo, só com as estradas e referências essenciais em destaque. */
     fun applyTheme(style: Style, night: Boolean) {
         val t = if (night) NIGHT else DAY
         for (layer in style.layers) {
             val id = layer.id
             if (id.startsWith("mr-")) continue
             if (HIDE.any { id.contains(it) }) {
-                layer.setProperties(PropertyFactory.visibility(Property.NONE)); continue
+                layer.setProperties(PropertyFactory.visibility(Property.NONE))
+                continue
             }
             when (layer) {
-                is org.maplibre.android.style.layers.BackgroundLayer ->
+                is BackgroundLayer ->
                     layer.setProperties(PropertyFactory.backgroundColor(t.bg))
                 is FillLayer -> when (id) {
                     "water" -> layer.setProperties(PropertyFactory.fillColor(t.water))
-                    "park" -> layer.setProperties(PropertyFactory.fillColor(t.park), PropertyFactory.fillOpacity(0.7f))
+                    "park" -> layer.setProperties(PropertyFactory.fillColor(t.park), PropertyFactory.fillOpacity(0.65f))
                 }
                 is LineLayer -> {
                     val casing = id.endsWith("_casing")
                     val c = when {
                         id.contains("waterway") -> t.water
-                        id.contains("boundary") -> if (night) "#4A535E" else "#B0B6BD"
+                        id.contains("boundary") -> if (night) "#3E4752" else "#B5BCC4"
                         id.contains("motorway") -> if (casing) t.motorwayCase else t.motorway
                         id.contains("trunk_primary") -> if (casing) t.primaryCase else t.primary
                         id.contains("secondary_tertiary") -> if (casing) t.secondaryCase else t.secondary
@@ -118,28 +133,35 @@ object MapLayers {
                 is SymbolLayer -> if (!id.contains("shield")) layer.setProperties(
                     PropertyFactory.textColor(t.text),
                     PropertyFactory.textHaloColor(t.halo),
-                    PropertyFactory.textHaloWidth(1.5f),
+                    PropertyFactory.textHaloWidth(1.6f),
                 )
             }
         }
-        // rota: azul forte; alternativas em cinza
-        style.getLayer("mr-route-main")?.setProperties(PropertyFactory.lineColor(if (night) ROUTE_BLUE_NIGHT else ROUTE_BLUE))
-        style.getLayer("mr-route-casing")?.setProperties(PropertyFactory.lineColor(if (night) "#0B3A80" else "#0D47A1"))
-        style.getLayer("mr-route-alt")?.setProperties(PropertyFactory.lineColor(if (night) "#6B7480" else "#9AA0A6"))
+        style.getLayer("mr-route-main")?.setProperties(
+            PropertyFactory.lineColor(if (night) ROUTE_BLUE_NIGHT else ROUTE_BLUE)
+        )
+        style.getLayer("mr-route-casing")?.setProperties(
+            PropertyFactory.lineColor(if (night) "#0B3574" else "#0D47A1")
+        )
+        style.getLayer("mr-route-alt")?.setProperties(
+            PropertyFactory.lineColor(if (night) "#636E7B" else "#8E96A0")
+        )
+        style.getLayer("mr-known-label")?.setProperties(
+            PropertyFactory.textHaloColor(if (night) "#12161C" else "#FFFFFF")
+        )
     }
 
-    /** seta branca (">") desenhada ao longo da rota, apontando o sentido */
-    private fun arrowBitmap(): android.graphics.Bitmap {
+    private fun arrowBitmap(): Bitmap {
         val size = 48
-        val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
-        val c = android.graphics.Canvas(bmp)
-        val path = android.graphics.Path().apply {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val path = Path().apply {
             moveTo(14f, 10f); lineTo(34f, 24f); lineTo(14f, 38f)
         }
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.STROKE
-            strokeCap = android.graphics.Paint.Cap.ROUND
-            strokeJoin = android.graphics.Paint.Join.ROUND
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
             strokeWidth = 7f
             color = android.graphics.Color.WHITE
         }
@@ -156,80 +178,91 @@ object MapLayers {
         style.addSource(GeoJsonSource(SRC_RADARS))
         style.addSource(GeoJsonSource(SRC_HAZARDS))
 
-        // tudo que e "chao" (areas, rota) fica ABAIXO dos nomes e placas das rodovias
         val labelAnchor = style.layers.firstOrNull { it is SymbolLayer && !it.id.startsWith("mr-") }?.id
-        fun below(layer: org.maplibre.android.style.layers.Layer) {
+        fun below(layer: Layer) {
             if (labelAnchor != null) style.addLayerBelow(layer, labelAnchor) else style.addLayer(layer)
         }
 
-        // imagem de satelite (desligada ate o usuario pedir): fica por cima do fundo e abaixo das estradas
-        val satTiles = org.maplibre.android.style.sources.TileSet("2.1.0", SAT_URL).apply {
-            maxZoom = 15f
-            attribution = "Sentinel-2 cloudless – s2maps.eu by EOX IT Services GmbH (Copernicus Sentinel data)"
+        // Sentinel-2 global da EOX vai até zoom 13 na América do Sul; maxZoom=13 faz o MapLibre ampliar sem buracos 404
+        val satTiles = TileSet("2.1.0", SAT_URL).apply {
+            maxZoom = 13f
+            attribution = "Sentinel-2 cloudless – s2maps.eu by EOX"
         }
-        style.addSource(org.maplibre.android.style.sources.RasterSource(SRC_SAT, satTiles, 256))
-        val satLayer = org.maplibre.android.style.layers.RasterLayer(LAYER_SAT, SRC_SAT).withProperties(
+        style.addSource(RasterSource(SRC_SAT, satTiles, 256))
+        val satLayer = RasterLayer(LAYER_SAT, SRC_SAT).withProperties(
             PropertyFactory.visibility(Property.NONE),
         )
-        val firstRoad = style.layers.firstOrNull { it is LineLayer && (it.id.startsWith("tunnel_") || it.id.startsWith("road_")) }?.id
+        val firstRoad = style.layers.firstOrNull {
+            it is LineLayer && (it.id.startsWith("tunnel_") || it.id.startsWith("road_"))
+        }?.id
         if (firstRoad != null) style.addLayerBelow(satLayer, firstRoad) else below(satLayer)
 
+        // Áreas bloqueadas pelo usuário
         below(
             FillLayer("mr-risk-fill", SRC_RISKS).withProperties(
                 PropertyFactory.fillColor("#E53935"),
-                PropertyFactory.fillOpacity(0.28f),
+                PropertyFactory.fillOpacity(0.24f),
             )
         )
         below(
             LineLayer("mr-risk-line", SRC_RISKS).withProperties(
-                PropertyFactory.lineColor("#E53935"),
+                PropertyFactory.lineColor("#EF5350"),
                 PropertyFactory.lineWidth(2f),
             )
         )
-        // rodovias com muitos assaltos: faixa vermelha larga e transparente por baixo da via
+
+        // Corredores de atenção: realce discreto sob a rodovia (sem poluir o mapa)
         below(
             LineLayer("mr-corridor", SRC_CORRIDORS).withProperties(
                 PropertyFactory.lineColor("#D32F2F"),
-                PropertyFactory.lineOpacity(0.35f),
-                PropertyFactory.lineWidth(Expression.interpolate(Expression.linear(), Expression.zoom(),
-                    Expression.stop(8, 3f), Expression.stop(12, 8f), Expression.stop(16, 18f))),
+                PropertyFactory.lineOpacity(0.18f),
+                PropertyFactory.lineWidth(
+                    Expression.interpolate(
+                        Expression.linear(), Expression.zoom(),
+                        Expression.stop(9, 2f), Expression.stop(13, 6f), Expression.stop(16, 12f)
+                    )
+                ),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
-            )
+            ).apply { minZoom = 9.5f }
         )
-        // areas de risco conhecidas (vem com o app): vermelho escuro = evitar, laranja = atencao
+
+        // Áreas de risco conhecidas: sutis no mapa, rótulos apenas em zoom próximo sem sobrepor ruas
         below(
             FillLayer("mr-known-fill", SRC_KNOWN).withProperties(
                 PropertyFactory.fillColor(Expression.get("cor")),
-                PropertyFactory.fillOpacity(0.16f),
-            )
+                PropertyFactory.fillOpacity(0.11f),
+            ).apply { minZoom = 10f }
         )
         below(
             LineLayer("mr-known-line", SRC_KNOWN).withProperties(
                 PropertyFactory.lineColor(Expression.get("cor")),
-                PropertyFactory.lineWidth(1.5f),
+                PropertyFactory.lineWidth(1.2f),
                 PropertyFactory.lineDasharray(arrayOf(3f, 2f)),
-                PropertyFactory.lineOpacity(0.8f),
-            )
+                PropertyFactory.lineOpacity(0.55f),
+            ).apply { minZoom = 10.5f }
         )
         style.addLayer(
             SymbolLayer("mr-known-label", SRC_KNOWN).withProperties(
                 PropertyFactory.textField(Expression.get("nome")),
                 PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
-                PropertyFactory.textSize(12f),
+                PropertyFactory.textSize(11f),
                 PropertyFactory.textColor(Expression.get("cor")),
                 PropertyFactory.textHaloColor("#FFFFFF"),
                 PropertyFactory.textHaloWidth(1.5f),
                 PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_POINT),
-            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point"))).apply { minZoom = 12.5f }
+                PropertyFactory.textAllowOverlap(false),
+            ).withFilter(Expression.eq(Expression.geometryType(), Expression.literal("Point")))
+                .apply { minZoom = 13.5f }
         )
 
+        // Rotas (alternativas em cinza + selecionada em azul com setas de sentido)
         style.addImage("mr-arrow", arrowBitmap())
         val selected = Expression.eq(Expression.get("sel"), Expression.literal(true))
         below(
             LineLayer("mr-route-alt", SRC_ROUTES).withProperties(
-                PropertyFactory.lineColor("#9AA0A6"),
+                PropertyFactory.lineColor("#8E96A0"),
                 PropertyFactory.lineWidth(6f),
-                PropertyFactory.lineOpacity(0.9f),
+                PropertyFactory.lineOpacity(0.82f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ).withFilter(Expression.not(selected))
@@ -237,7 +270,7 @@ object MapLayers {
         below(
             LineLayer("mr-route-casing", SRC_ROUTES).withProperties(
                 PropertyFactory.lineColor("#0D47A1"),
-                PropertyFactory.lineWidth(13f),
+                PropertyFactory.lineWidth(12.5f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ).withFilter(selected)
@@ -245,7 +278,7 @@ object MapLayers {
         below(
             LineLayer("mr-route-main", SRC_ROUTES).withProperties(
                 PropertyFactory.lineColor(ROUTE_BLUE),
-                PropertyFactory.lineWidth(10f),
+                PropertyFactory.lineWidth(9.5f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ).withFilter(selected)
@@ -253,44 +286,44 @@ object MapLayers {
         below(
             SymbolLayer("mr-route-arrows", SRC_ROUTES).withProperties(
                 PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_LINE),
-                PropertyFactory.symbolSpacing(80f),
+                PropertyFactory.symbolSpacing(95f),
                 PropertyFactory.iconImage("mr-arrow"),
-                PropertyFactory.iconSize(0.65f),
+                PropertyFactory.iconSize(0.62f),
                 PropertyFactory.iconAllowOverlap(true),
                 PropertyFactory.iconIgnorePlacement(true),
                 PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
                 PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_MAP),
-            ).withFilter(selected).apply { minZoom = 11f }
+            ).withFilter(selected).apply { minZoom = 11.5f }
         )
 
-        // radares: plaquinha branca com borda vermelha e o limite
+        // Radares: só aparecem em zoom urbano/rodoviário próximo para manter o mapa limpo
         style.addLayer(
             CircleLayer("mr-radar", SRC_RADARS).withProperties(
                 PropertyFactory.circleRadius(
                     Expression.interpolate(
                         Expression.linear(), Expression.zoom(),
-                        Expression.stop(10, 4f), Expression.stop(15, 11f)
+                        Expression.stop(13, 4.5f), Expression.stop(16, 10.5f)
                     )
                 ),
                 PropertyFactory.circleColor("#FFFFFF"),
                 PropertyFactory.circleStrokeColor("#E53935"),
-                PropertyFactory.circleStrokeWidth(3f),
-            ).apply { minZoom = 12.5f }
+                PropertyFactory.circleStrokeWidth(2.6f),
+            ).apply { minZoom = 13.2f }
         )
         style.addLayer(
             SymbolLayer("mr-radar-label", SRC_RADARS).withProperties(
                 PropertyFactory.textField(Expression.get("lim")),
                 PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
-                PropertyFactory.textSize(11f),
+                PropertyFactory.textSize(10.5f),
                 PropertyFactory.textColor("#111111"),
-                PropertyFactory.textAllowOverlap(true),
-                PropertyFactory.textIgnorePlacement(true),
-            ).apply { minZoom = 13f }
+                PropertyFactory.textAllowOverlap(false),
+            ).apply { minZoom = 14.2f }
         )
-        // alertas (buraco, policia...)
+
+        // Alertas marcados pelo piloto
         style.addLayer(
             CircleLayer("mr-hazard", SRC_HAZARDS).withProperties(
-                PropertyFactory.circleRadius(10f),
+                PropertyFactory.circleRadius(9.5f),
                 PropertyFactory.circleColor(Expression.get("color")),
                 PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(2f),
@@ -300,28 +333,29 @@ object MapLayers {
             SymbolLayer("mr-hazard-label", SRC_HAZARDS).withProperties(
                 PropertyFactory.textField(Expression.get("label")),
                 PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
-                PropertyFactory.textSize(12f),
+                PropertyFactory.textSize(11.5f),
                 PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
                 PropertyFactory.textColor("#FFFFFF"),
                 PropertyFactory.textHaloColor("#101214"),
-                PropertyFactory.textHaloWidth(2f),
-                PropertyFactory.textAllowOverlap(true),
-            ).apply { minZoom = 11f }
+                PropertyFactory.textHaloWidth(1.8f),
+                PropertyFactory.textAllowOverlap(false),
+            ).apply { minZoom = 11.5f }
         )
 
+        // Pontos do roteiro (Partida, Paradas, Destino)
         style.addLayer(
             CircleLayer("mr-wp", SRC_WPS).withProperties(
-                PropertyFactory.circleRadius(9f),
+                PropertyFactory.circleRadius(8.5f),
                 PropertyFactory.circleColor(Expression.get("color")),
-                PropertyFactory.circleStrokeColor("#3C4043"),
-                PropertyFactory.circleStrokeWidth(3f),
+                PropertyFactory.circleStrokeColor("#1F242B"),
+                PropertyFactory.circleStrokeWidth(2.8f),
             )
         )
         style.addLayer(
             SymbolLayer("mr-wp-label", SRC_WPS).withProperties(
                 PropertyFactory.textField(Expression.get("label")),
-                PropertyFactory.textFont(arrayOf("Noto Sans Regular")),
-                PropertyFactory.textSize(13f),
+                PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+                PropertyFactory.textSize(12.5f),
                 PropertyFactory.textOffset(arrayOf(0f, 1.4f)),
                 PropertyFactory.textColor("#FFFFFF"),
                 PropertyFactory.textHaloColor("#101214"),
@@ -345,7 +379,7 @@ object MapLayers {
         src.setGeoJson(FeatureCollection.fromFeatures(feats))
     }
 
-    /** Navegando: desenha so o que falta da rota (o trecho percorrido some). */
+    /** Em navegação: desenha apenas o trecho restante a partir da posição projetada da moto. */
     fun updateRemaining(style: Style, route: RouteResult, fromIndex: Int, start: GeoPoint) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_ROUTES) ?: return
         val pts = ArrayList<Point>(route.points.size - fromIndex + 1)
@@ -361,26 +395,28 @@ object MapLayers {
 
     fun updateRisks(style: Style, risks: List<RiskArea>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_RISKS) ?: return
-        src.setGeoJson(FeatureCollection.fromFeatures(risks.map { Feature.fromGeometry(circle(it.point, it.radiusM.toDouble())) }))
+        src.setGeoJson(
+            FeatureCollection.fromFeatures(risks.map { Feature.fromGeometry(circle(it.point, it.radiusM.toDouble())) })
+        )
     }
 
-    fun updateCorridors(style: Style, list: List<com.motorota.data.Corridor>) {
+    fun updateCorridors(style: Style, list: List<Corridor>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_CORRIDORS) ?: return
         val feats = list.flatMap { c ->
-            c.lines.map { l -> Feature.fromGeometry(org.maplibre.geojson.LineString.fromLngLats(l.map { Point.fromLngLat(it.lon, it.lat) })) }
+            c.lines.map { l -> Feature.fromGeometry(LineString.fromLngLats(l.map { Point.fromLngLat(it.lon, it.lat) })) }
         }
         src.setGeoJson(FeatureCollection.fromFeatures(feats))
     }
 
-    fun updateKnownRisks(style: Style, list: List<com.motorota.data.KnownRisk>) {
+    fun updateKnownRisks(style: Style, list: List<KnownRisk>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_KNOWN) ?: return
         val feats = ArrayList<Feature>()
         for (k in list) {
-            val cor = if (k.avoid) "#C62828" else "#EF6C00"
+            val cor = if (k.avoid) "#D32F2F" else "#EF6C00"
             feats.add(Feature.fromGeometry(circle(k.point, k.radiusM.toDouble())).apply { addStringProperty("cor", cor) })
             feats.add(Feature.fromGeometry(Point.fromLngLat(k.point.lon, k.point.lat)).apply {
                 addStringProperty("cor", cor)
-                addStringProperty("nome", (if (k.avoid) "Risco: " else "Atenção: ") + k.name.substringBefore(" ("))
+                addStringProperty("nome", k.name.substringBefore(" ("))
             })
         }
         src.setGeoJson(FeatureCollection.fromFeatures(feats))
@@ -395,41 +431,46 @@ object MapLayers {
                 addStringProperty("label", label)
             })
         }
-        origin?.let { add(it.point, "#5F6368", "Partida") }
+        origin?.let { add(it.point, "#10B981", "Partida") }
         stops.forEachIndexed { i, w -> add(w.point, "#FFFFFF", "${i + 1}") }
-        dest?.let { add(it.point, "#EA4335", "Destino") }
+        dest?.let { add(it.point, "#EF4444", "Destino") }
         src.setGeoJson(FeatureCollection.fromFeatures(feats))
     }
 
-    fun updateRadars(style: Style, radars: List<com.motorota.data.Radar>) {
+    fun updateRadars(style: Style, radars: List<Radar>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_RADARS) ?: return
-        src.setGeoJson(FeatureCollection.fromFeatures(radars.map { r ->
-            Feature.fromGeometry(Point.fromLngLat(r.point.lon, r.point.lat)).apply {
-                addStringProperty("lim", if (r.limitKmh > 0) r.limitKmh.toString() else "")
-            }
-        }))
+        src.setGeoJson(
+            FeatureCollection.fromFeatures(radars.map { r ->
+                Feature.fromGeometry(Point.fromLngLat(r.point.lon, r.point.lat)).apply {
+                    addStringProperty("lim", if (r.limitKmh > 0) r.limitKmh.toString() else "")
+                }
+            })
+        )
     }
 
-    fun updateHazards(style: Style, hazards: List<com.motorota.data.Hazard>) {
+    fun updateHazards(style: Style, hazards: List<Hazard>) {
         val src = style.getSourceAs<GeoJsonSource>(SRC_HAZARDS) ?: return
-        src.setGeoJson(FeatureCollection.fromFeatures(hazards.map { h ->
-            Feature.fromGeometry(Point.fromLngLat(h.point.lon, h.point.lat)).apply {
-                addStringProperty("label", h.type.label)
-                addStringProperty(
-                    "color", when (h.type) {
-                        com.motorota.data.HazardType.POLICIA -> "#1E88E5"
-                        com.motorota.data.HazardType.ACIDENTE -> "#E53935"
-                        com.motorota.data.HazardType.RADAR_MOVEL -> "#8E24AA"
-                        com.motorota.data.HazardType.OBRA -> "#E65100"
-                        else -> "#F57C00"
-                    }
-                )
-            }
-        }))
+        src.setGeoJson(
+            FeatureCollection.fromFeatures(hazards.map { h ->
+                Feature.fromGeometry(Point.fromLngLat(h.point.lon, h.point.lat)).apply {
+                    addStringProperty("label", h.type.label)
+                    addStringProperty(
+                        "color",
+                        when (h.type) {
+                            HazardType.POLICIA -> "#1E88E5"
+                            HazardType.ACIDENTE -> "#E53935"
+                            HazardType.RADAR_MOVEL -> "#8E24AA"
+                            HazardType.OBRA -> "#E65100"
+                            else -> "#F57C00"
+                        }
+                    )
+                }
+            })
+        )
     }
 
     private fun circle(c: GeoPoint, radiusM: Double): Polygon {
-        val pts = ArrayList<Point>()
+        val pts = ArrayList<Point>(49)
         val dLat = radiusM / 110540.0
         val dLon = radiusM / (111320.0 * cos(Math.toRadians(c.lat)))
         for (i in 0..48) {

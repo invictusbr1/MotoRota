@@ -5,9 +5,10 @@ import com.motorota.routing.GeoPoint
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.floor
 
 // ------------------------------------------------------------------
-// Radares fixos (vem dentro do app, do OpenStreetMap)
+// Radares fixos (vêm dentro do app, do OpenStreetMap)
 // ------------------------------------------------------------------
 
 data class Radar(val point: GeoPoint, val limitKmh: Int, val directionDeg: Int?)
@@ -16,9 +17,9 @@ class RadarStore(private val ctx: Context) {
     @Volatile var all: List<Radar> = emptyList(); private set
     @Volatile private var grid = HashMap<Long, MutableList<Radar>>()
 
-    /** le o arquivo de radares (chamar fora da thread principal) */
+    /** Lê o arquivo de radares fora da thread principal. */
     fun load() {
-        val grid = HashMap<Long, MutableList<Radar>>()
+        val nextGrid = HashMap<Long, MutableList<Radar>>()
         val list = ArrayList<Radar>(12000)
         try {
             ctx.assets.open("radares.csv").bufferedReader().useLines { lines ->
@@ -26,42 +27,48 @@ class RadarStore(private val ctx: Context) {
                     if (line.startsWith("#") || line.isBlank()) return@forEach
                     val p = line.split(',')
                     if (p.size < 3) return@forEach
+                    val lat = p[0].toDoubleOrNull() ?: return@forEach
+                    val lon = p[1].toDoubleOrNull() ?: return@forEach
                     val r = Radar(
-                        GeoPoint(p[0].toDouble(), p[1].toDouble()),
+                        GeoPoint(lat, lon),
                         p[2].toIntOrNull() ?: 0,
-                        p.getOrNull(3)?.toIntOrNull(),
+                        p.getOrNull(3)?.trim()?.toIntOrNull(),
                     )
                     list.add(r)
-                    grid.getOrPut(cell(r.point.lat, r.point.lon)) { ArrayList() }.add(r)
+                    nextGrid.getOrPut(cell(lat, lon)) { ArrayList() }.add(r)
                 }
             }
         } catch (_: Exception) {
         }
-        this.grid = grid
+        this.grid = nextGrid
         all = list
     }
 
-    /** radares a ate ~1 km do ponto (consulta rapida por grade de 0,01 grau) */
+    /** Radares a até ~1 km do ponto (consulta rápida por grade de 0,01 grau). */
     fun near(p: GeoPoint): List<Radar> {
         val out = ArrayList<Radar>()
-        val la = Math.floor(p.lat * 100).toLong()
-        val lo = Math.floor(p.lon * 100).toLong()
-        for (dy in -1..1) for (dx in -1..1) grid[key(la + dy, lo + dx)]?.let { out.addAll(it) }
+        val la = floor(p.lat * 100).toLong()
+        val lo = floor(p.lon * 100).toLong()
+        for (dy in -1..1) {
+            for (dx in -1..1) {
+                grid[key(la + dy, lo + dx)]?.let { out.addAll(it) }
+            }
+        }
         return out
     }
 
-    private fun cell(lat: Double, lon: Double) = key(Math.floor(lat * 100).toLong(), Math.floor(lon * 100).toLong())
-    private fun key(la: Long, lo: Long) = la * 100_000L + lo
+    private fun cell(lat: Double, lon: Double) = key(floor(lat * 100).toLong(), floor(lon * 100).toLong())
+    private fun key(la: Long, lo: Long) = (la shl 32) xor (lo and 0xffffffffL)
 }
 
 // ------------------------------------------------------------------
-// Alertas marcados pelo usuario (tipo Waze)
+// Alertas marcados pelo usuário (estilo Waze)
 // ------------------------------------------------------------------
 
 enum class HazardType(val emoji: String, val label: String, val speech: String, val hoursValid: Int) {
     BURACO("🕳️", "Buraco", "buraco na pista", 24 * 60),
-    POLICIA("👮", "Polícia", "polícia", 4),
-    ACIDENTE("💥", "Acidente", "acidente", 4),
+    POLICIA("👮", "Polícia", "polícia à frente", 4),
+    ACIDENTE("💥", "Acidente", "acidente na pista", 4),
     RADAR_MOVEL("📸", "Radar móvel", "radar móvel", 6),
     OBRA("🚧", "Obra", "obra na pista", 24 * 30),
     PERIGO("⚠️", "Perigo", "perigo na pista", 12),
@@ -81,23 +88,33 @@ class HazardStore(ctx: Context) {
         val now = System.currentTimeMillis()
         return try {
             val arr = JSONArray(file.readText())
-            (0 until arr.length()).mapNotNull { i ->
+            val allParsed = (0 until arr.length()).mapNotNull { i ->
                 val o = arr.getJSONObject(i)
                 val type = runCatching { HazardType.valueOf(o.getString("tipo")) }.getOrNull() ?: return@mapNotNull null
                 Hazard(o.getLong("id"), type, GeoPoint(o.getDouble("lat"), o.getDouble("lon")), o.getLong("criado"))
-            }.filter { it.expiresAt > now }
+            }
+            val active = allParsed.filter { it.expiresAt > now }
+            if (active.size != allParsed.size) save(active)
+            active
         } catch (_: Exception) {
             emptyList()
         }
     }
 
     fun save(list: List<Hazard>) {
+        val now = System.currentTimeMillis()
         val arr = JSONArray()
-        list.forEach {
-            arr.put(JSONObject().put("id", it.id).put("tipo", it.type.name)
-                .put("lat", it.point.lat).put("lon", it.point.lon).put("criado", it.createdAt))
+        list.filter { it.expiresAt > now }.forEach {
+            arr.put(
+                JSONObject()
+                    .put("id", it.id)
+                    .put("tipo", it.type.name)
+                    .put("lat", it.point.lat)
+                    .put("lon", it.point.lon)
+                    .put("criado", it.createdAt)
+            )
         }
-        file.writeText(arr.toString())
+        atomicWrite(file, arr.toString())
     }
 }
 
@@ -123,17 +140,19 @@ class TripStore(ctx: Context) {
         if (!file.exists()) return emptyList()
         return try {
             val arr = JSONArray(file.readText())
-            (0 until arr.length()).map { i ->
-                val o = arr.getJSONObject(i)
-                val stops = o.getJSONArray("paradas")
-                SavedTrip(
-                    id = o.getLong("id"),
-                    name = o.getString("nome"),
-                    origin = o.optJSONObject("partida")?.let(::pt),
-                    stops = (0 until stops.length()).map { pt(stops.getJSONObject(it)) },
-                    destination = pt(o.getJSONObject("destino")),
-                    mode = o.optString("modo", "DESEMPENHO"),
-                )
+            (0 until arr.length()).mapNotNull { i ->
+                runCatching {
+                    val o = arr.getJSONObject(i)
+                    val stops = o.getJSONArray("paradas")
+                    SavedTrip(
+                        id = o.getLong("id"),
+                        name = o.getString("nome"),
+                        origin = o.optJSONObject("partida")?.let(::pt),
+                        stops = (0 until stops.length()).map { pt(stops.getJSONObject(it)) },
+                        destination = pt(o.getJSONObject("destino")),
+                        mode = o.optString("modo", "DESEMPENHO"),
+                    )
+                }.getOrNull()
             }
         } catch (_: Exception) {
             emptyList()
@@ -145,15 +164,26 @@ class TripStore(ctx: Context) {
         list.forEach { t ->
             arr.put(
                 JSONObject()
-                    .put("id", t.id).put("nome", t.name).put("modo", t.mode)
+                    .put("id", t.id)
+                    .put("nome", t.name)
+                    .put("modo", t.mode)
                     .put("partida", t.origin?.let(::js))
                     .put("paradas", JSONArray().apply { t.stops.forEach { put(js(it)) } })
                     .put("destino", js(t.destination))
             )
         }
-        file.writeText(arr.toString())
+        atomicWrite(file, arr.toString())
     }
 
     private fun pt(o: JSONObject) = SavedPoint(GeoPoint(o.getDouble("lat"), o.getDouble("lon")), o.optString("nome"))
     private fun js(p: SavedPoint) = JSONObject().put("lat", p.point.lat).put("lon", p.point.lon).put("nome", p.name)
+}
+
+internal fun atomicWrite(file: File, content: String) {
+    val tmp = File(file.parentFile, file.name + ".tmp")
+    tmp.writeText(content)
+    if (!tmp.renameTo(file)) {
+        file.writeText(content)
+        tmp.delete()
+    }
 }
