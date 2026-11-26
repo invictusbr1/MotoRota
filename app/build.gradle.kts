@@ -22,9 +22,18 @@ android {
         val localProps = Properties().apply {
             rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
         }
-        val tomtomKey = System.getenv("TOMTOM_KEY") ?: localProps.getProperty("tomtom.key") ?: ""
+        // chaves.txt (na pasta do projeto, NAO vai para o GitHub): GEMINI_KEY=... e TOMTOM_KEY=...
+        val chaves = Properties().apply {
+            rootProject.file("chaves.txt").takeIf { it.exists() }?.reader(Charsets.UTF_8)?.use { load(it) }
+        }
+        fun chave(nome: String, vararg extra: String?): String =
+            (listOf(System.getenv(nome), chaves.getProperty(nome)) + extra)
+                .firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
+        val tomtomKey = chave("TOMTOM_KEY", localProps.getProperty("tomtom.key"))
+        val geminiKey = chave("GEMINI_KEY")
         val githubRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "invictusbr1/MotoRota"
         buildConfigField("String", "TOMTOM_KEY", "\"" + tomtomKey + "\"")
+        buildConfigField("String", "GEMINI_KEY", "\"" + geminiKey + "\"")
         buildConfigField("String", "GITHUB_REPO", "\"" + githubRepo + "\"")
         ndk { abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a,armeabi-v7a").split(",") }
     }
@@ -71,4 +80,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("org.maplibre.gl:android-sdk:13.7.1")
+
+    // Jarvis: reconhece a palavra "Jarvis" offline no celular
+    implementation("com.alphacephei:vosk-android:0.3.47@aar")
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 }

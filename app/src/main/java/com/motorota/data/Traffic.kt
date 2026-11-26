@@ -30,7 +30,7 @@ data class LiveIncident(
  * acontecendo AGORA ao longo da rota: interdicoes, acidentes, obras, alagamentos...
  */
 object Traffic {
-    val enabled get() = BuildConfig.TOMTOM_KEY.isNotBlank()
+    val enabled get() = Keys.tomtom.isNotBlank()
 
     /** a ultima consulta deixou algum pedaco da rota sem resposta? */
     @Volatile var partial = false; private set
@@ -78,7 +78,7 @@ object Traffic {
 
     private fun fetch(b: DoubleArray): String {
         val url = "https://api.tomtom.com/traffic/services/5/incidentDetails" +
-            "?key=" + BuildConfig.TOMTOM_KEY +
+            "?key=" + Keys.tomtom +
             "&bbox=" + "%.5f,%.5f,%.5f,%.5f".format(java.util.Locale.US, b[0], b[1], b[2], b[3]) +
             "&fields=" + URLEncoder.encode(FIELDS, "UTF-8") +
             "&language=pt-PT"

@@ -31,6 +31,7 @@ jobs:
       - name: Compilar
         env:
           TOMTOM_KEY: ${{ secrets.TOMTOM_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon

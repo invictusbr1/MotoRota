@@ -13,7 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.speech.tts.UtteranceProgressListener
+import com.motorota.assistant.Jarvis
+import com.motorota.assistant.Tool
 import com.motorota.data.Corridor
+import com.motorota.data.Keys
 import com.motorota.data.Corridors
 import com.motorota.data.Geocoder
 import com.motorota.data.Hazard
@@ -59,6 +63,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.time.LocalTime
@@ -76,6 +83,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val hazardStore = HazardStore(app)
     private val tripStore = TripStore(app)
     private val prefs = app.getSharedPreferences("preferencias", Context.MODE_PRIVATE)
+
+    init {
+        Keys.init(app)
+    }
 
     // ---------- Estado de GPS ----------
     var myLocation by mutableStateOf<GeoPoint?>(null); private set
@@ -128,6 +139,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var pinnedNav by mutableStateOf(
         prefs.getStringSet("botoes_nav", null)?.toSet() ?: QuickAction.DEFAULT_NAV
     )
+    init {
+        // versão com Jarvis: coloca o botão do microfone na tela uma vez (dá para tirar no menu)
+        if (!prefs.getBoolean("pin_jarvis_v1", false)) {
+            pinnedMap = pinnedMap + QuickAction.JARVIS.id
+            pinnedNav = pinnedNav + QuickAction.JARVIS.id
+            prefs.edit()
+                .putBoolean("pin_jarvis_v1", true)
+                .putStringSet("botoes_mapa", pinnedMap)
+                .putStringSet("botoes_nav", pinnedNav)
+                .apply()
+        }
+    }
     fun pinned(nav: Boolean): Set<String> = if (nav) pinnedNav else pinnedMap
     fun togglePin(nav: Boolean, id: String) {
         val cur = pinned(nav)
@@ -263,6 +286,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var lastUrgentSpeechMs = 0L
+    private val speechDone = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private var speechSeq = 0
 
     init {
         NavigationBridge.onLocation = { loc -> onLocation(loc) }
@@ -298,6 +323,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tts = TextToSpeech(app) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("pt", "BR")
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        utteranceId?.let { speechDone.remove(it)?.complete(Unit) }
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        utteranceId?.let { speechDone.remove(it)?.complete(Unit) }
+                    }
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                        utteranceId?.let { speechDone.remove(it)?.complete(Unit) }
+                    }
+                })
                 ttsReady = true
             }
         }
@@ -307,6 +345,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         NavigationBridge.onLocation = null
         NavigationBridge.onStopRequested = null
         NavigationService.stop(getApplication())
+        if (jarvisDelegate.isInitialized()) jarvis.release()
         tts?.shutdown()
     }
 
@@ -365,6 +404,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!navigating) return
         val st = nav.update(p)
         navState = st
+
+        // Seta presa na rua (estilo Waze): o GPS do celular erra 10-40 m para o lado;
+        // se estamos perto da rota, desenha a moto em cima da linha, apontando para a via.
+        val snapLimit = if (loc.hasAccuracy()) loc.accuracy.coerceIn(25f, 45f) else 35f
+        val sp = st.snapped
+        if (sp != null && st.offRouteM <= snapLimit && !rerouting) {
+            val pts = nav.route.points
+            val i = st.progressIndex.coerceIn(0, pts.size - 2)
+            val a = pts[i]
+            val b = pts[i + 1]
+            val k = cos(Math.toRadians(a.lat))
+            val roadBearing = ((Math.toDegrees(atan2((b.lon - a.lon) * k, b.lat - a.lat)) + 360) % 360).toFloat()
+            lastLocation = Location(loc).apply {
+                latitude = sp.lat
+                longitude = sp.lon
+                if (a.distanceTo(b) > 1.0) bearing = roadBearing
+            }
+        }
 
         if (stops.isNotEmpty() && p.distanceTo(stops.first().point) < 100) {
             stops = stops.drop(1)
@@ -953,6 +1010,226 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             hasMaps = engine.hasAnyMap()
         }
+    }
+
+    // ---------- Jarvis (assistente de voz) ----------
+    private val jarvisDelegate = lazy {
+        Jarvis(
+            ctx = getApplication(),
+            scope = viewModelScope,
+            tools = jarvisTools(),
+            systemPrompt = ::jarvisPrompt,
+            speak = ::speakAndWait,
+            notify = { message = it },
+        )
+    }
+    val jarvis: Jarvis by jarvisDelegate
+
+    /** Fala e só volta quando terminar (o Jarvis espera para voltar a ouvir). Ignora o "mudo" dos avisos. */
+    suspend fun speakAndWait(text: String) {
+        val t = tts ?: return
+        if (!ttsReady || text.isBlank()) return
+        val id = "jarvis-${++speechSeq}"
+        val done = CompletableDeferred<Unit>()
+        speechDone[id] = done
+        lastUrgentSpeechMs = SystemClock.elapsedRealtime()
+        t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+        withTimeoutOrNull(4000L + text.length * 110L) { done.await() }
+        speechDone.remove(id)
+    }
+
+    private fun jarvisPrompt(): String {
+        val now = java.time.LocalDateTime.now()
+        val quando = now.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, dd/MM/yyyy, HH:mm", Locale("pt", "BR")))
+        val onde = myLocation?.let { String.format(Locale.US, "%.5f, %.5f", it.lat, it.lon) } ?: "desconhecida (sem GPS)"
+        val rota = when {
+            navigating -> "navegando para ${destination?.name ?: "o destino"}"
+            destination != null -> "rota planejada para ${destination?.name}, ainda não iniciada"
+            else -> "sem rota no momento"
+        }
+        return """
+            Você é o Jarvis, o assistente de voz do MotoRota, um app de navegação para moto. Quem fala com você é o piloto, de capacete, pilotando.
+            Regras:
+            - Responda sempre em português do Brasil, de forma natural e curta (1 a 3 frases), porque a resposta é falada no capacete.
+            - Nada de markdown, listas, asteriscos ou emojis. Fale números de um jeito natural (ex.: "dois radares, o primeiro a 800 metros").
+            - Para qualquer coisa do app (traçar rota, parada, radares, quanto falta, chegada, trânsito, clima, procurar lugares, onde estou, parar navegação, voz dos avisos) USE AS FUNÇÕES. Nunca invente radares, distâncias ou tempos: use só o que as funções devolverem.
+            - "Programa a rota pra X", "me leva pra X", "vamos pra X" = navegar_para.
+            - Se o destino for ambíguo, escolha o mais provável perto do piloto; só pergunte se for impossível decidir.
+            - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
+            - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
+            Situação agora: $quando. Localização: $onde. Velocidade: $speedKmh km/h. Estado: $rota.
+        """.trimIndent()
+    }
+
+    private fun jarvisTools(): List<Tool> = listOf(
+        Tool(
+            "navegar_para",
+            "Traça a rota até um lugar e já começa a navegação guiada por voz.",
+            mapOf("destino" to ("STRING" to "lugar, endereço, bairro, cidade ou estabelecimento, como o piloto falou")),
+            listOf("destino"),
+        ) { a -> jarvisNavigate(a.optString("destino")) },
+        Tool(
+            "adicionar_parada",
+            "Adiciona uma parada no caminho da rota atual (posto, restaurante, endereço...). Recalcula a rota.",
+            mapOf("lugar" to ("STRING" to "lugar da parada")),
+            listOf("lugar"),
+        ) { a -> jarvisAddStop(a.optString("lugar")) },
+        Tool(
+            "radares_a_frente",
+            "Conta os radares de velocidade à frente e diz a distância e o limite de cada um. Navegando, considera só os que estão na rota; sem rota, os que estão em volta.",
+            mapOf("distancia_km" to ("NUMBER" to "até quantos km à frente olhar; não envie para considerar a rota inteira")),
+        ) { a -> jarvisRadars(a) },
+        Tool(
+            "situacao_da_viagem",
+            "Quanto falta (distância e tempo), hora prevista de chegada, próxima manobra, velocidade, limite da via, próximos alertas, trânsito, clima e autonomia do tanque.",
+        ) { _ -> jarvisStatus() },
+        Tool(
+            "buscar_lugares",
+            "Procura lugares (ex.: posto de gasolina, farmácia, hotel, borracharia, um endereço) perto do piloto e diz a distância de cada um. Não traça rota.",
+            mapOf("consulta" to ("STRING" to "o que procurar")),
+            listOf("consulta"),
+        ) { a -> jarvisSearch(a.optString("consulta")) },
+        Tool(
+            "onde_estou",
+            "Diz a rua, o bairro e a cidade onde o piloto está agora.",
+        ) { _ -> jarvisWhereAmI() },
+        Tool(
+            "parar_navegacao",
+            "Encerra a navegação atual.",
+        ) { _ ->
+            withContext(Dispatchers.Main) {
+                if (navigating) { stopNavigation(); "Navegação encerrada." } else "Não havia navegação ativa."
+            }
+        },
+        Tool(
+            "avisos_de_voz",
+            "Liga ou desliga os avisos falados de manobra e radar (o Jarvis continua respondendo).",
+            mapOf("ligar" to ("BOOLEAN" to "true para ligar, false para desligar")),
+            listOf("ligar"),
+        ) { a ->
+            withContext(Dispatchers.Main) {
+                val want = a.optBoolean("ligar", true)
+                if (voiceOn != want) toggleVoice()
+                if (want) "Avisos de voz ligados." else "Avisos de voz desligados."
+            }
+        },
+    )
+
+    private suspend fun jarvisNavigate(dest: String): String {
+        if (dest.isBlank()) return "Faltou dizer o destino."
+        val here = withContext(Dispatchers.Main) { myLocation }
+        val p = Geocoder.search(dest, here).firstOrNull() ?: return "Não encontrei \"$dest\" no mapa."
+        withContext(Dispatchers.Main) {
+            stops = emptyList()
+            origin = null
+            pendingStart = true
+            goTo(Waypoint(p.point, p.name))
+        }
+        repeat(50) {
+            delay(300)
+            val done = withContext(Dispatchers.Main) {
+                val r = currentRoute
+                val err = routeErrors[mode]
+                when {
+                    r != null -> "Destino: ${p.name} (${p.detail}). Rota de ${formatDistance(r.distanceM.toDouble())}, " +
+                        "cerca de ${formatDuration(r.timeS)}. Navegação iniciada."
+                    err != null -> "Achei ${p.name} (${p.detail}), mas não consegui traçar a rota: $err"
+                    myLocation == null -> "Achei ${p.name}, mas estou sem GPS para traçar a rota."
+                    else -> null
+                }
+            }
+            if (done != null) return done
+        }
+        return "Destino ${p.name} definido; a rota ainda está sendo calculada."
+    }
+
+    private suspend fun jarvisAddStop(place: String): String {
+        if (place.isBlank()) return "Faltou dizer o lugar da parada."
+        val hasDest = withContext(Dispatchers.Main) { destination != null }
+        if (!hasDest) return jarvisNavigate(place)
+        val here = withContext(Dispatchers.Main) { myLocation }
+        val p = Geocoder.search(place, here).firstOrNull() ?: return "Não encontrei \"$place\"."
+        withContext(Dispatchers.Main) {
+            if (navigating) pendingStart = true
+            addStop(Waypoint(p.point, p.name))
+        }
+        return "Parada em ${p.name} (${p.detail}) adicionada. A rota está sendo recalculada."
+    }
+
+    private suspend fun jarvisRadars(a: JSONObject): String = withContext(Dispatchers.Main) {
+        val km = if (a.has("distancia_km")) a.optDouble("distancia_km", -1.0) else -1.0
+        val st = navState
+        if (navigating && st != null) {
+            val maxM = if (km > 0) km * 1000 else Double.MAX_VALUE
+            val ahead = alongAlerts
+                .filter { it.isRadar && it.posM > st.alongM && it.posM - st.alongM <= maxM }
+                .sortedBy { it.posM }
+            val faixa = if (km > 0) "nos próximos ${formatDistance(km * 1000)}" else "até o destino"
+            if (ahead.isEmpty()) "Nenhum radar na rota $faixa."
+            else "${ahead.size} radar(es) na rota $faixa: " + ahead.take(6).joinToString("; ") {
+                "a ${formatDistance(it.posM - st.alongM)}" + if (it.limitKmh > 0) ", limite ${it.limitKmh}" else ""
+            } + "."
+        } else {
+            val me = myLocation ?: return@withContext "Estou sem GPS agora."
+            val raio = (if (km > 0) km else 5.0) * 1000
+            val near = radarStore.all
+                .map { it to it.point.distanceTo(me) }
+                .filter { it.second <= raio }
+                .sortedBy { it.second }
+            val faixa = "num raio de ${formatDistance(raio)} (sem rota ativa, então não sei quais estão no seu caminho)"
+            if (near.isEmpty()) "Nenhum radar $faixa."
+            else "${near.size} radar(es) $faixa. Os mais perto: " + near.take(4).joinToString("; ") { (r, d) ->
+                "a ${formatDistance(d)}" + if (r.limitKmh > 0) ", limite ${r.limitKmh}" else ""
+            } + "."
+        }
+    }
+
+    private suspend fun jarvisStatus(): String = withContext(Dispatchers.Main) {
+        val sb = StringBuilder()
+        sb.append("Velocidade atual: $speedKmh km/h. ")
+        currentLimit?.let { sb.append("Limite da via: $it km/h. ") }
+        val st = navState
+        if (navigating && st != null) {
+            val eta = LocalTime.now().plusSeconds(st.remainingS.toLong())
+            sb.append(
+                "Indo para ${destination?.name ?: "o destino"}. Faltam ${formatDistance(st.remainingM)}, " +
+                    "cerca de ${formatDuration(st.remainingS)}, chegada por volta de ${eta.hour}:${String.format(Locale.US, "%02d", eta.minute)}. ",
+            )
+            st.nextHint?.let { sb.append("Próxima manobra: ${Instructions.text(it)} em ${formatDistance(st.distToHintM)}. ") }
+            val next = alongAlerts.filter { it.posM > st.alongM }.sortedBy { it.posM }.take(3)
+            if (next.isNotEmpty()) {
+                sb.append("Próximos alertas: " + next.joinToString("; ") { "${it.title} a ${formatDistance(it.posM - st.alongM)}" } + ". ")
+            }
+            if (stops.isNotEmpty()) sb.append("Paradas que faltam: ${stops.joinToString(", ") { it.name }}. ")
+        } else if (destination != null) {
+            val r = currentRoute
+            if (r != null) sb.append("Rota planejada para ${destination?.name}: ${formatDistance(r.distanceM.toDouble())}, ${formatDuration(r.timeS)}, ainda não iniciada. ")
+            else sb.append("Destino ${destination?.name} escolhido, rota ainda sendo calculada. ")
+        } else {
+            sb.append("Nenhuma rota ativa. ")
+        }
+        if (liveIncidents.isNotEmpty()) {
+            sb.append("Ocorrências de trânsito na rota: ${liveIncidents.take(3).joinToString("; ") { it.title }}. ")
+        }
+        trafficStatus?.let { sb.append("Trânsito: $it. ") }
+        routeWeather?.rainText?.let { sb.append("Clima: $it. ") }
+        routeWeather?.sunsetText?.let { sb.append("$it. ") }
+        fuelLeftKm?.let { sb.append("Autonomia estimada do tanque: $it km. ") }
+        if (gpsLost) sb.append("Sinal de GPS fraco agora. ")
+        sb.toString()
+    }
+
+    private suspend fun jarvisSearch(q: String): String {
+        if (q.isBlank()) return "Faltou dizer o que procurar."
+        val here = withContext(Dispatchers.Main) { myLocation }
+        val found = Geocoder.search(q, here).take(5)
+        if (found.isEmpty()) return "Não encontrei nada para \"$q\"."
+        return found.joinToString("; ") { "${it.name} (${it.detail})" }
+    }
+
+    private suspend fun jarvisWhereAmI(): String {
+        val here = withContext(Dispatchers.Main) { myLocation } ?: return "Estou sem GPS agora."
+        return Geocoder.reverse(here) ?: "Não consegui descobrir o nome do lugar (sem internet?)."
     }
 
     companion object {

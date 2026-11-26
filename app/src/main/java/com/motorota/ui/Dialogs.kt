@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OpenWith
 import androidx.compose.material.icons.rounded.Place
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
+import com.motorota.data.Keys
 import com.motorota.R
 import com.motorota.data.Corridors
 import com.motorota.data.HazardType
@@ -496,12 +498,15 @@ private fun SummaryMetricRow(icon: ImageVector, label: String, value: String) {
 
 /** Ajustes gerais: autonomia do tanque e proteção em áreas de risco conhecidas. */
 @Composable
-fun SettingsDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, onDismiss: () -> Unit) {
     var tankText by remember { mutableStateOf(if (vm.tankKm > 0) vm.tankKm.toString() else "") }
+    var geminiText by remember { mutableStateOf(Keys.geminiSaved()) }
+    var tomtomText by remember { mutableStateOf(Keys.tomtomSaved()) }
+    var keysSaved by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DialogBg,
-        title = { Text("Ajustes da moto", color = Color.White, fontWeight = FontWeight.Bold) },
+        title = { Text("Ajustes", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
@@ -550,6 +555,71 @@ fun SettingsDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                                 Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Mic, null, tint = Color(0xFF22D3EE), modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Assistente Jarvis", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text(
+                            "Diga \"Jarvis\" (ou toque no microfone) e peça: \"programa a rota pra Xerém\", " +
+                                "\"quantos radares tem pra frente?\", \"quanto falta?\", \"posto mais perto\"... " +
+                                "Ele também conversa sobre qualquer assunto.",
+                            color = TextDim,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Atender quando eu disser \"Jarvis\"", color = Color.White, fontSize = 14.5.sp)
+                                Text(
+                                    "Ouve só com o app aberto na tela. Na 1ª vez baixa 40 MB (use Wi-Fi).",
+                                    color = TextDim,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Switch(
+                                checked = vm.jarvis.wakeOn,
+                                onCheckedChange = { on -> if (on) withMic { vm.jarvis.setWake(true) } else vm.jarvis.setWake(false) },
+                            )
+                        }
+                        OutlinedTextField(
+                            value = geminiText,
+                            onValueChange = { geminiText = it.trim(); keysSaved = false },
+                            label = { Text(if (Keys.geminiBuiltIn) "Chave do Gemini (já configurada)" else "Chave do Gemini (obrigatória)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Grátis em aistudio.google.com/apikey (entre com sua conta Google e toque em \"Create API key\").",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
+                        OutlinedTextField(
+                            value = tomtomText,
+                            onValueChange = { tomtomText = it.trim(); keysSaved = false },
+                            label = { Text(if (Keys.tomtomBuiltIn) "Chave da TomTom (já configurada)" else "Chave da TomTom (busca e trânsito)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Opcional, mas melhora muito a busca de hotéis, praças e lojas. Grátis em developer.tomtom.com.",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
+                        Button(
+                            onClick = { Keys.save(tomtomText, geminiText); keysSaved = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (keysSaved) "Chaves salvas ✓" else "Salvar chaves") }
                     }
                 }
 

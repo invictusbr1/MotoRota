@@ -82,16 +82,17 @@ object MapLayers {
     )
 
     private val DAY = MapPalette(
-        bg = "#EEF1F4", water = "#A6D5FA", park = "#DCEFD9",
-        minor = "#FFFFFF", minorCase = "#DFE3E8",
-        secondary = "#FFFFFF", secondaryCase = "#CBD0D6",
-        primary = "#FFFFFF", primaryCase = "#B8BFC7",
-        motorway = "#FFFFFF", motorwayCase = "#959EA8",
+        // ruas brancas com contorno bem marcado sobre fundo cinza: dá para ver as ruas ao redor
+        bg = "#E6EAEF", water = "#A6D5FA", park = "#D6EBD2",
+        minor = "#FFFFFF", minorCase = "#B9C1CB",
+        secondary = "#FFFFFF", secondaryCase = "#A3ADB9",
+        primary = "#FFF6DC", primaryCase = "#C9A95A",
+        motorway = "#FFE9B0", motorwayCase = "#C08A2E",
         text = "#4A5056", halo = "#FFFFFF",
     )
     private val NIGHT = MapPalette(
         bg = "#161B22", water = "#0D1620", park = "#16221E",
-        minor = "#28303B", minorCase = "#141920",
+        minor = "#323C49", minorCase = "#0E1217",
         secondary = "#343E4B", secondaryCase = "#141920",
         primary = "#434F5E", primaryCase = "#141920",
         motorway = "#566475", motorwayCase = "#141920",

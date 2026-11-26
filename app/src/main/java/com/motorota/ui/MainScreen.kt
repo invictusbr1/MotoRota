@@ -46,7 +46,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,6 +100,33 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
         }
     }
 
+    // Microfone: pede a permissão na hora em que o Jarvis é usado pela primeira vez
+    var afterMic by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) afterMic?.invoke() else vm.message = "Sem o microfone o Jarvis não consegue ouvir."
+        afterMic = null
+    }
+    val withMic: (() -> Unit) -> Unit = { run ->
+        if (vm.jarvis.hasMic()) run() else {
+            afterMic = run
+            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Liga/desliga o microfone do Jarvis quando o app aparece ou some da tela
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            when (e) {
+                Lifecycle.Event.ON_START -> vm.jarvis.setForeground(true)
+                Lifecycle.Event.ON_STOP -> vm.jarvis.setForeground(false)
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
     val onAction: (QuickAction) -> Unit = { action ->
         when (action) {
             QuickAction.PASSEIOS -> showTrips = true
@@ -109,6 +143,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
             QuickAction.MAPAS -> showDownloads = true
             QuickAction.AJUSTES -> showSettings = true
             QuickAction.SAIR -> vm.stopNavigation()
+            QuickAction.JARVIS -> withMic { vm.jarvis.trigger() }
         }
     }
 
@@ -146,6 +181,15 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
                 onMenu = { showMenu = true },
             )
         }
+
+        JarvisBubble(
+            vm,
+            Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = if (vm.navigating) 196.dp else 84.dp, start = 16.dp, end = 16.dp)
+                .zIndex(11f),
+        )
 
         // Toast flutuante discreto no topo/centro (não bloqueia o botão INICIAR)
         val msg = vm.message
@@ -205,6 +249,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
     if (showSettings) {
         SettingsDialog(
             vm = vm,
+            withMic = withMic,
             onDismiss = {
                 showSettings = false
                 focusManager.clearFocus(force = true)

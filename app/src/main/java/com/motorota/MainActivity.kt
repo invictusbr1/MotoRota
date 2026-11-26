@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         hasPermission.value = granted[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             granted[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (hasPermission.value) startGps()
+        vm.jarvis.setForeground(true)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,14 +96,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (!hasPermission.value) {
+        val prefs = getSharedPreferences("preferencias", MODE_PRIVATE)
+        val askMic = !vm.jarvis.hasMic() && !prefs.getBoolean("pediu_microfone", false)
+        if (!hasPermission.value || askMic) {
             val perms = buildList {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-                add(Manifest.permission.ACCESS_COARSE_LOCATION)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    add(Manifest.permission.POST_NOTIFICATIONS)
+                if (!hasPermission.value) {
+                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
                 }
+                if (askMic) add(Manifest.permission.RECORD_AUDIO)
             }
+            if (askMic) prefs.edit().putBoolean("pediu_microfone", true).apply()
             permissionLauncher.launch(perms.toTypedArray())
         }
     }

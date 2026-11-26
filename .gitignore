@@ -10,3 +10,7 @@ keystore/
 
 publicar-github.*
 enviar-para-github.*
+enviar-atualizacao.bat
+chaves.txt
+configurar-chaves.bat
+configurar-chaves.ps1

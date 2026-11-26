@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.SatelliteAlt
 import androidx.compose.material.icons.rounded.Star
@@ -59,7 +60,8 @@ enum class QuickAction(val id: String, val label: String, val inMap: Boolean, va
     ABASTECI("abasteci", "Registrar abastecimento", true, true),
     GERAL("geral", "Visão geral da rota", false, true),
     MAPAS("mapas", "Mapas offline", true, false),
-    AJUSTES("ajustes", "Ajustes da moto", true, true),
+    AJUSTES("ajustes", "Ajustes (moto e Jarvis)", true, true),
+    JARVIS("jarvis", "Falar com o Jarvis", true, true),
     SAIR("sair", "Encerrar navegação", false, true),
     ;
 
@@ -81,12 +83,14 @@ fun QuickAction.vectorIcon(vm: AppViewModel): ImageVector = when (this) {
     QuickAction.GERAL -> Icons.Rounded.ZoomOutMap
     QuickAction.MAPAS -> Icons.Rounded.Download
     QuickAction.AJUSTES -> Icons.Rounded.Tune
+    QuickAction.JARVIS -> Icons.Rounded.Mic
     QuickAction.SAIR -> Icons.Rounded.Close
 }
 
 fun QuickAction.iconTint(vm: AppViewModel): Color = when (this) {
     QuickAction.AVISAR -> WarningColor
     QuickAction.SAIR -> Danger
+    QuickAction.JARVIS -> if (vm.jarvis.wakeOn) Color(0xFF22D3EE) else Color.White
     QuickAction.VOZ -> if (vm.voiceOn) Color.White else TextDim
     QuickAction.TEMA -> if (vm.night) Color(0xFFFDE047) else Color.White
     else -> Color.White
@@ -186,6 +190,7 @@ fun QuickMenuDialog(
                                         QuickAction.VOZ -> if (vm.voiceOn) "Ativado" else "Silenciado"
                                         QuickAction.SATELITE -> if (vm.satellite) "Ativado" else "Mapa padrão"
                                         QuickAction.TEMA -> if (vm.night) "Modo noturno" else "Modo diurno"
+                                        QuickAction.JARVIS -> if (vm.jarvis.wakeOn) "Atende quando você diz \"Jarvis\"" else "Toque para falar"
                                         else -> null
                                     }
                                     if (sub != null) Text(sub, fontSize = 12.sp, color = TextDim)
