@@ -60,11 +60,70 @@ object MapLayers {
         )
         for (layer in style.layers) {
             val id = layer.id
-            if (id.startsWith("mr-")) continue
+            if (id.startsWith("mr-") && id != LAYER_ROAD_LABEL) continue
             if (layer is LineLayer && (id.startsWith("road_") || id.startsWith("bridge_") || id.startsWith("tunnel_"))) {
-                layer.setProperties(PropertyFactory.lineOpacity(if (on) 0.55f else 1f))
+                if (!on) {
+                    layer.setProperties(PropertyFactory.lineOpacity(1f))
+                    continue
+                }
+                // no satélite: ruas em amarelo-claro (rodovia mais forte), com contorno escuro para destacar da foto
+                val casing = id.endsWith("_casing")
+                val (color, alpha) = when {
+                    casing -> "#3A2E05" to 0.55f
+                    id.contains("motorway") || id.contains("trunk_primary") -> "#FFC93C" to 0.92f
+                    id.contains("secondary_tertiary") -> "#FFDD7A" to 0.85f
+                    else -> "#FFF0B8" to 0.72f
+                }
+                layer.setProperties(PropertyFactory.lineColor(color), PropertyFactory.lineOpacity(alpha))
+            } else if (layer is SymbolLayer && !id.startsWith("poi") && !id.contains("shield")) {
+                if (on) layer.setProperties(
+                    PropertyFactory.textColor("#FFFFFF"),
+                    PropertyFactory.textHaloColor("#1B1B1B"),
+                    PropertyFactory.textHaloWidth(1.8f),
+                )
             }
         }
+    }
+
+    private const val LAYER_ROAD_LABEL = "mr-road-label"
+
+    /**
+     * Rodovias e avenidas principais sempre com o código e o nome juntos: "BR-040 · Rodovia Washington Luiz".
+     * Substitui a plaquinha e o nome separados do estilo original.
+     */
+    private fun addRoadLabels(style: Style) {
+        if (style.getLayer(LAYER_ROAD_LABEL) != null) return
+        val src = style.sources.firstOrNull { it.id == "openmaptiles" }?.id ?: return
+        style.layers.filter { it.id.startsWith("highway-shield") || it.id == "highway-name-major" }
+            .forEach { it.setProperties(PropertyFactory.visibility(Property.NONE)) }
+        val ref = Expression.get("ref")
+        val name = Expression.get("name")
+        val hasRef = Expression.all(Expression.has("ref"), Expression.neq(ref, Expression.literal("")))
+        val hasName = Expression.all(Expression.has("name"), Expression.neq(name, Expression.literal("")))
+        val text = Expression.switchCase(
+            Expression.all(hasRef, hasName, Expression.neq(ref, name)), Expression.concat(ref, Expression.literal(" · "), name),
+            hasRef, ref,
+            name,
+        )
+        val layer = SymbolLayer(LAYER_ROAD_LABEL, src).withProperties(
+            PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_LINE),
+            PropertyFactory.textField(text),
+            PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+            PropertyFactory.textSize(Expression.interpolate(Expression.linear(), Expression.zoom(),
+                Expression.stop(8, 10f), Expression.stop(14, 13f), Expression.stop(17, 14.5f))),
+            PropertyFactory.textColor("#3A2A00"),
+            PropertyFactory.textHaloColor("#FFFFFF"),
+            PropertyFactory.textHaloWidth(1.8f),
+            PropertyFactory.textMaxAngle(35f),
+            PropertyFactory.symbolSpacing(320f),
+            PropertyFactory.textLetterSpacing(0.02f),
+        )
+        layer.sourceLayer = "transportation_name"
+        layer.setFilter(Expression.match(Expression.get("class"), Expression.literal(false),
+            Expression.stop("motorway", true), Expression.stop("trunk", true), Expression.stop("primary", true)))
+        layer.minZoom = 7f
+        val firstOurs = style.layers.firstOrNull { it.id.startsWith("mr-") && it.id != LAYER_SAT }?.id
+        if (firstOurs != null) style.addLayerBelow(layer, firstOurs) else style.addLayer(layer)
     }
 
     private val HIDE = listOf(
@@ -106,6 +165,7 @@ object MapLayers {
 
     /** Deixa o mapa limpo, só com as estradas e referências essenciais em destaque. */
     fun applyTheme(style: Style, night: Boolean) {
+        addRoadLabels(style)
         val t = if (night) NIGHT else DAY
         for (layer in style.layers) {
             val id = layer.id
@@ -157,6 +217,10 @@ object MapLayers {
         )
         style.getLayer("mr-route-alt")?.setProperties(
             PropertyFactory.lineColor(if (night) "#636E7B" else "#8E96A0")
+        )
+        style.getLayer(LAYER_ROAD_LABEL)?.setProperties(
+            PropertyFactory.textColor(if (night) "#F3D58A" else "#3A2A00"),
+            PropertyFactory.textHaloColor(if (night) "#12161C" else "#FFFFFF"),
         )
         style.getLayer("mr-known-label")?.setProperties(
             PropertyFactory.textHaloColor(if (night) "#12161C" else "#FFFFFF")
