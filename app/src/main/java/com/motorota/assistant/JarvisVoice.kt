@@ -119,6 +119,14 @@ object JarvisVoice {
 
     /** Toca e espera terminar. voiceCall = durante chamada do intercomunicador (sai pelo canal da ligação). */
     /** rateFactor < 1 deixa a voz mais grave e um pouco mais lenta */
+    @Volatile private var current: AudioTrack? = null
+
+    /** Corta a fala que estiver tocando (nunca duas vozes ao mesmo tempo). */
+    fun stopAll() {
+        current?.let { runCatching { it.pause(); it.flush() } }
+        current = null
+    }
+
     suspend fun play(a: Audio, voiceCall: Boolean, rateFactor: Float = 1f) {
         val rate = (a.rate * rateFactor).toInt()
         val track = withContext(Dispatchers.IO) {
@@ -142,10 +150,13 @@ object JarvisVoice {
                 .also { it.write(a.pcm, 0, a.pcm.size) }
         }
         try {
+            stopAll()
+            current = track
             track.play()
-            val ms = a.pcm.size / 2 * 1000L / rate
-            delay(ms + 150)
+            val end = android.os.SystemClock.elapsedRealtime() + a.pcm.size / 2 * 1000L / rate + 150
+            while (android.os.SystemClock.elapsedRealtime() < end && current === track) delay(80)
         } finally {
+            if (current === track) current = null
             runCatching { track.stop() }
             track.release()
         }

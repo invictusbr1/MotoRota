@@ -39,7 +39,7 @@ data class Friend(val id: String, val name: String)
 data class Group(val id: String, val name: String, val members: List<Friend>)
 
 /** Recado de voz/texto entre pilotos: fica guardado na central até o outro celular pegar. */
-data class Recado(val fromId: String, val fromName: String, val text: String, val group: String?, val time: Long)
+data class Recado(val fromId: String, val fromName: String, val text: String, val group: String?, val time: Long, val notice: Boolean = false)
 
 enum class CallState { IDLE, CALLING, RINGING, IN_CALL }
 
@@ -134,8 +134,11 @@ class Intercom(
         if (n.isEmpty()) return "Dê um nome para o grupo."
         val mem = friends.filter { it.id in memberIds }
         if (mem.isEmpty()) return "Escolha pelo menos um amigo."
-        groups = groups.filter { norm(it.name) != norm(n) } + Group(UUID.randomUUID().toString(), n, mem)
+        val g = Group(UUID.randomUUID().toString(), n, mem)
+        groups = groups.filter { norm(it.name) != norm(n) } + g
         saveGroups()
+        // avisa os amigos na hora: o grupo aparece no celular deles e o Jarvis deles fala
+        sendRecado(null, g, "criou o grupo $n", notice = true)
         return "Grupo $n criado com ${mem.size} piloto(s). Diga \"Jarvis, manda no grupo $n...\"."
     }
 
@@ -152,7 +155,7 @@ class Intercom(
     }
 
     /** Manda um recado para um amigo ou grupo. Sem internet, guarda e envia assim que voltar. */
-    fun sendRecado(toFriend: Friend?, toGroup: Group?, text: String): String {
+    fun sendRecado(toFriend: Friend?, toGroup: Group?, text: String, notice: Boolean = false): String {
         if (myName.isBlank()) return "Antes, coloque seu nome no MotoRota."
         val t = text.trim().take(500)
         if (t.isEmpty()) return "Qual é o recado?"
@@ -162,6 +165,7 @@ class Intercom(
             else -> return "Para quem é o recado?"
         }.filter { it != myId }.distinct()
         val extra = JSONObject()
+        if (notice) extra.put("aviso", true)
         if (toGroup != null) {
             extra.put("grupo", JSONObject().put("id", toGroup.id).put("nome", toGroup.name).put(
                 "membros",
@@ -230,8 +234,11 @@ class Intercom(
                 adoptGroup(g)
             }
             val friendName = friends.firstOrNull { it.id == from }?.name ?: o.optString("de_nome")
-            val r = Recado(from, friendName, o.optString("texto"), gName, System.currentTimeMillis())
-            recent = (recent + r).takeLast(20)
+            val r = Recado(
+                from, friendName, o.optString("texto"), gName, System.currentTimeMillis(),
+                notice = o.optJSONObject("extra")?.optBoolean("aviso") == true,
+            )
+            if (!r.notice) recent = (recent + r).takeLast(20)
             onRecado?.invoke(r)
         }
     }

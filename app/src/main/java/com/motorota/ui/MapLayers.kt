@@ -50,7 +50,8 @@ object MapLayers {
     private const val SRC_POIS = "mr-pois"
     private const val SRC_SAT = "mr-sat"
     private const val LAYER_SAT = "mr-sat-layer"
-    private const val SAT_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg"
+    // Esri World Imagery: foto aérea de alta resolução (dá para ver rua, carro e telhado nas cidades)
+    private const val SAT_URL = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
     /** Liga/desliga a imagem de satélite mantendo as vias legíveis por cima. */
     fun setSatellite(style: Style, on: Boolean) {
@@ -195,10 +196,10 @@ object MapLayers {
             if (labelAnchor != null) style.addLayerBelow(layer, labelAnchor) else style.addLayer(layer)
         }
 
-        // Sentinel-2 global da EOX vai até zoom 13 na América do Sul; maxZoom=13 faz o MapLibre ampliar sem buracos 404
+        // alta resolução até zoom 19 nas cidades; acima disso o MapLibre amplia a última imagem
         val satTiles = TileSet("2.1.0", SAT_URL).apply {
-            maxZoom = 13f
-            attribution = "Sentinel-2 cloudless – s2maps.eu by EOX"
+            maxZoom = 19f
+            attribution = "Imagens © Esri, Maxar, Earthstar Geographics"
         }
         style.addSource(RasterSource(SRC_SAT, satTiles, 256))
         val satLayer = RasterLayer(LAYER_SAT, SRC_SAT).withProperties(

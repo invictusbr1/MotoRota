@@ -929,6 +929,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun say(text: String, urgent: Boolean = true) {
         if (!voiceOn || !ttsReady) return
+        if (speechLock.isLocked) {
+            if (!urgent) {
+                // o Jarvis está falando: o aviso espera ele terminar (em vez de falar por cima)
+                viewModelScope.launch { speechLock.withLock { sayNow(text, false) } }
+                return
+            }
+            // manobra agora: corta o Jarvis e fala a curva
+            JarvisVoice.stopAll()
+        }
+        sayNow(text, urgent)
+    }
+
+    private fun sayNow(text: String, urgent: Boolean) {
         val now = SystemClock.elapsedRealtime()
         val queueMode = if (!urgent && now - lastUrgentSpeechMs < 4000) {
             // Não corta uma instrução de curva recém-iniciada: coloca o alerta logo em seguida
@@ -1311,15 +1324,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Recado de outro piloto: o Jarvis fala na hora (espera terminar o que estiver falando). */
     private fun announceRecado(r: com.motorota.intercom.Recado) {
-        message = "💬 ${r.fromName}${r.group?.let { " ($it)" } ?: ""}: ${r.text}"
+        message = if (r.notice) "👥 ${r.fromName} criou o grupo ${r.group} com você"
+        else "💬 ${r.fromName}${r.group?.let { " ($it)" } ?: ""}: ${r.text}"
         viewModelScope.launch {
             recadoQueue.withLock {
                 var tries = 0
                 while (jarvisDelegate.isInitialized() && jarvis.busyNow && tries < 40) { delay(1500); tries++ }
                 val me = riderName.ifBlank { intercomDelegate.value.myName }.split(' ').firstOrNull().orEmpty()
                 val lead = if (me.isNotBlank()) "$me, " else ""
-                val where = r.group?.let { "no grupo $it, " } ?: ""
-                speakAndWait("$lead${where}recado do ${r.fromName}: ${r.text}")
+                if (r.notice) {
+                    speakAndWait("${lead}o ${r.fromName} criou o grupo ${r.group} e te colocou nele. Pode mandar recado para o grupo quando quiser.")
+                } else {
+                    val where = r.group?.let { "no grupo $it, " } ?: ""
+                    speakAndWait("$lead${where}recado do ${r.fromName}: ${r.text}")
+                }
             }
         }
     }
@@ -1457,8 +1475,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Uma fala por vez: resposta do Jarvis, recado, aviso de mensagem e dica do copiloto entram em fila. */
+    private val speechLock = kotlinx.coroutines.sync.Mutex()
+    val speakingNow get() = speechLock.isLocked
+
     suspend fun speakAndWait(text: String) {
         if (text.isBlank()) return
+        speechLock.withLock { speakNow(text) }
+    }
+
+    private suspend fun speakNow(text: String) {
         val inCallNow = intercomDelegate.isInitialized() && intercom.inCall
         // Voz offline (Piper): grátis, sem limite e sem internet
         if (jarvisVoice.startsWith("piper:")) {
@@ -1731,6 +1757,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val here = withContext(Dispatchers.Main) { myLocation }
         val found = Geocoder.search(dest, here)
         val p = found.firstOrNull() ?: return "Não encontrei \"$dest\" no mapa."
+        if (!Geocoder.matches(p, dest)) {
+            Http.report("jarvis-destino", "pediu \"$dest\" -> sem nome igual, perguntou: " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
+            return "Não achei exatamente \"$dest\". Os mais parecidos: " +
+                found.take(3).joinToString("; ") { "${it.name} (${it.detail})" } +
+                ". Pergunte ao piloto qual é, ou peça a cidade mais próxima do lugar."
+        }
         Http.report("jarvis-destino", "pediu \"$dest\" -> " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
         withContext(Dispatchers.Main) {
             stops = emptyList()
@@ -1738,7 +1770,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             pendingStart = true
             goTo(Waypoint(p.point, p.name))
         }
-        repeat(50) {
+        repeat(150) { // viagem longa pode levar até ~45 s para calcular
             delay(300)
             val done = withContext(Dispatchers.Main) {
                 val r = currentRoute

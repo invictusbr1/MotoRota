@@ -88,8 +88,43 @@ object Geocoder {
      * 2) começa com o pedido; 3) contém todas as palavras; 4) o resto.
      * Dentro de cada grupo, o mais perto de você primeiro. Assim o mesmo nome em outro estado fica para trás.
      */
+    private fun clean(s: String) = norm(s).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+
+    private val STATES = mapOf(
+        "acre" to "ac", "alagoas" to "al", "amapa" to "ap", "amazonas" to "am", "bahia" to "ba", "ceara" to "ce",
+        "distrito federal" to "df", "espirito santo" to "es", "goias" to "go", "maranhao" to "ma", "mato grosso" to "mt",
+        "mato grosso do sul" to "ms", "minas gerais" to "mg", "minas" to "mg", "para" to "pa", "paraiba" to "pb",
+        "parana" to "pr", "pernambuco" to "pe", "piaui" to "pi", "rio de janeiro" to "rj", "rio grande do norte" to "rn",
+        "rio grande do sul" to "rs", "rondonia" to "ro", "roraima" to "rr", "santa catarina" to "sc", "sao paulo" to "sp",
+        "sergipe" to "se", "tocantins" to "to",
+    )
+
+    /** "Capão Bonito, São Paulo" -> nome "capao bonito" + complementos ["sao paulo"] */
+    private fun split(query: String): Pair<String, List<String>> {
+        val parts = query.split(',').map { clean(it) }.filter { it.isNotEmpty() }
+        if (parts.size <= 1) return clean(query) to emptyList()
+        return parts.first() to parts.drop(1)
+    }
+
+    /** O complemento (estado/cidade) aparece no endereço do lugar? */
+    private fun qualifiersOk(p: Place, quals: List<String>): Boolean {
+        if (quals.isEmpty()) return true
+        val all = " " + clean(p.name + " " + p.detail) + " "
+        return quals.all { q -> all.contains(" $q ") || STATES[q]?.let { all.contains(" $it ") } == true }
+    }
+
+    /** O lugar escolhido tem mesmo o nome pedido (para o Jarvis não ir para um lugar aleatório). */
+    fun matches(p: Place, query: String): Boolean {
+        val (main, quals) = split(query)
+        val n = clean(p.name)
+        val words = main.split(' ').filter { it.length > 1 && it !in setOf("de", "da", "do", "das", "dos", "rua", "av", "avenida") }
+        val nameOk = n == main || n.contains(main) || main.contains(n) && n.length > 3 ||
+            (words.isNotEmpty() && words.all { clean(p.name + " " + p.detail).contains(it) })
+        return nameOk && qualifiersOk(p, quals)
+    }
+
     private fun rank(list: List<Place>, query: String, near: GeoPoint?): List<Place> {
-        val q = norm(query).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+        val (q, quals) = split(query)
         val words = q.split(' ').filter { it.length > 1 }
         fun nameScore(p: Place): Int {
             val n = norm(p.name).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
@@ -107,7 +142,8 @@ object Geocoder {
         val wantsBusiness = Regex("restaurante|posto|hotel|bar|loja|mercado|farmacia|oficina|padaria|lanchonete|pizzaria|shopping|hospital|banco")
             .containsMatchIn(q)
         return list.sortedWith(
-            compareByDescending<Place> { nameScore(it) }
+            compareByDescending<Place> { if (qualifiersOk(it, quals)) 1 else 0 }
+                .thenByDescending { nameScore(it) }
                 .thenByDescending { if (wantsBusiness) 0 else if (it.area) 1 else 0 }
                 .thenBy { dist(it) },
         )

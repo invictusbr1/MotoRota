@@ -67,7 +67,9 @@ object TomTomRouter {
     ): RouteResult? = withContext(Dispatchers.IO) {
         if (base.points.size < 2) return@withContext null
         val total = base.cumDist.last()
-        val step = maxOf(250.0, total / 180)
+        // viagem longa: a TomTom não segue bem o caminho (desvia dezenas de km); o mapa novo importa mais na cidade
+        if (total > 200_000) return@withContext null
+        val step = maxOf(150.0, total / 350)
         val sup = ArrayList<GeoPoint>()
         var next = 0.0
         for (i in base.points.indices) {
@@ -84,7 +86,7 @@ object TomTomRouter {
                 "&travelMode=$travel&routeType=fastest&traffic=true&instructionsType=coded&language=pt-BR" +
                 "&routeRepresentation=polyline&computeTravelTimeFor=none" +
                 (if (sections) "&sectionType=speedLimit&sectionType=motorway&sectionType=unpaved" else ""),
-            "POST", body = body, readTimeoutMs = 20_000,
+            "POST", body = body, readTimeoutMs = 12_000,
         )
         var res = req("motorcycle", true)
         if (res.code == 400) res = req("car", false)
