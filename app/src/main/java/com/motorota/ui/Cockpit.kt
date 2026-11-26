@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.GpsOff
 import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Route
@@ -426,7 +427,7 @@ fun NavigationHud(
                             ) { Text("Geral", fontSize = 14.sp, fontWeight = FontWeight.Bold) }
                         }
                         RoundButton(onClick = onMenu, size = 48.dp) {
-                            Icon(Icons.Rounded.Menu, contentDescription = "Menu", tint = Color.White, modifier = Modifier.size(24.dp))
+                            Icon(Icons.Rounded.MoreVert, contentDescription = "Menu", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
                     }
                 }

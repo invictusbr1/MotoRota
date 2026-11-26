@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.AddLocationAlt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Search
@@ -154,7 +155,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
             }
             QuickAction.GERAL -> vm.overview()
             QuickAction.MAPAS -> showDownloads = true
-            QuickAction.AJUSTES -> showSettings = true
+            QuickAction.AJUSTES -> showMenu = true
             QuickAction.SAIR -> vm.stopNavigation()
             QuickAction.JARVIS -> withMic { vm.jarvis.trigger() }
         }
@@ -263,11 +264,19 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
     }
     if (showTrips) TripsDialog(vm, onDismiss = { showTrips = false })
     if (showMenu) {
-        QuickMenuDialog(
+        MenuScreen(
             vm = vm,
-            nav = vm.navigating,
-            onAction = onAction,
-            onDismiss = { showMenu = false },
+            withMic = withMic,
+            onReport = {
+                vm.myLocation?.let { reportAt = it } ?: run { vm.message = "Sem sinal de GPS para reportar na posição atual." }
+            },
+            onOpenDownloads = { showDownloads = true },
+            onOpenTrips = { showTrips = true },
+            onClose = {
+                showMenu = false
+                focusManager.clearFocus(force = true)
+                keyboard?.hide()
+            },
         )
     }
     if (showSettings) {
@@ -365,14 +374,6 @@ private fun PlanningOverlay(
                     )
                 }
 
-                Spacer(Modifier.width(8.dp))
-                RoundButton(
-                    onClick = onOpenDownloads,
-                    highlight = !vm.hasMaps || vm.downloadProgress.pending > 0,
-                    size = 52.dp,
-                ) {
-                    Icon(Icons.Rounded.Download, "Mapas offline", tint = Color.White, modifier = Modifier.size(24.dp))
-                }
             }
 
             // Lista suspensa de resultados da busca (flutua por cima sem empurrar a tela)
@@ -482,7 +483,7 @@ private fun PlanningOverlay(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             RoundButton(onClick = onMenu, size = if (hasRouteSheet) 46.dp else 50.dp) {
-                Icon(Icons.Rounded.Menu, "Menu", tint = Color.White, modifier = Modifier.size(23.dp))
+                Icon(Icons.Rounded.MoreVert, "Menu", tint = Color.White, modifier = Modifier.size(24.dp))
             }
             if (!hasRouteSheet) {
                 PinnedButtons(vm, nav = false, maxVisible = 4, buttonSize = 50.dp, onAction = onAction)

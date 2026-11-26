@@ -68,8 +68,8 @@ enum class QuickAction(val id: String, val label: String, val inMap: Boolean, va
     fun available(nav: Boolean) = if (nav) inNav else inMap
 
     companion object {
-        val DEFAULT_MAP = setOf(PASSEIOS.id, TEMA.id, SATELITE.id)
-        val DEFAULT_NAV = setOf(AVISAR.id, VOZ.id)
+        val DEFAULT_MAP = setOf(JARVIS.id)
+        val DEFAULT_NAV = setOf(AVISAR.id, JARVIS.id)
     }
 }
 

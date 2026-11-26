@@ -152,6 +152,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     )
     init {
         // versão com Jarvis: coloca o botão do microfone na tela uma vez (dá para tirar no menu)
+        // menu novo (três pontinhos): a tela volta para os atalhos enxutos, uma única vez
+        if (!prefs.getBoolean("tela_limpa_v1", false)) {
+            pinnedMap = QuickAction.DEFAULT_MAP
+            pinnedNav = QuickAction.DEFAULT_NAV
+            prefs.edit()
+                .putBoolean("tela_limpa_v1", true)
+                .putBoolean("pin_jarvis_v1", true)
+                .putStringSet("botoes_mapa", pinnedMap)
+                .putStringSet("botoes_nav", pinnedNav)
+                .apply()
+        }
         if (!prefs.getBoolean("pin_jarvis_v1", false)) {
             pinnedMap = pinnedMap + QuickAction.JARVIS.id
             pinnedNav = pinnedNav + QuickAction.JARVIS.id

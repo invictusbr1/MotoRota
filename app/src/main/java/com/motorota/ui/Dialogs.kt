@@ -507,6 +507,23 @@ private fun SummaryMetricRow(icon: ImageVector, label: String, value: String) {
 /** Ajustes gerais: autonomia do tanque e proteção em áreas de risco conhecidas. */
 @Composable
 fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DialogBg,
+        title = { Text("Ajustes", color = Color.White, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) { SettingsCards(vm, withMic, null) }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar", fontSize = 15.sp) } },
+    )
+}
+
+/** Cartões de ajustes; section = "moto", "apps", "intercom", "jarvis", "navegacao" ou null (todos). */
+@Composable
+fun SettingsCards(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, section: String?) {
     var tankText by remember { mutableStateOf(if (vm.tankKm > 0) vm.tankKm.toString() else "") }
     var geminiText by remember { mutableStateOf(Keys.geminiSaved()) }
     var groqText by remember { mutableStateOf(Keys.groqSaved()) }
@@ -519,342 +536,340 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
     val scope = rememberCoroutineScope()
     var testing by remember { mutableStateOf(false) }
     var testReport by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DialogBg,
-        title = { Text("Ajustes", color = Color.White, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Surface(
-                    color = SurfaceCard,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.LocalGasStation, null, tint = Color(0xFF60A5FA), modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Autonomia do tanque", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        Text(
-                            "Informe quantos km sua moto faz por tanque para acompanhar o consumo pelo GPS e receber alertas de reserva.",
-                            color = TextDim,
-                            fontSize = 12.5.sp,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = tankText,
-                                onValueChange = { t -> tankText = t.filter { it.isDigit() }.take(4) },
-                                label = { Text("km por tanque") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = { vm.setTank(tankText.toIntOrNull() ?: 0) }) { Text("Salvar") }
-                        }
-                        if (vm.tankKm > 0) {
-                            Text(
-                                "Rodados: ${vm.kmSinceFill.toInt()} km · Restam ~${(vm.fuelLeftKm ?: 0).coerceAtLeast(0)} km",
-                                color = TextDim,
-                                fontSize = 12.5.sp,
-                            )
-                            Button(
-                                onClick = { vm.refuel() },
-                                modifier = Modifier.fillMaxWidth().height(46.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = NavGreen, contentColor = Color(0xFF042617)),
-                            ) {
-                                Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+    fun show(s: String) = section == null || section == s
+    if (show("moto")) {
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.LocalGasStation, null, tint = Color(0xFF60A5FA), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Autonomia do tanque", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
-
-                Surface(
-                    color = SurfaceCard,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Jarvis nos seus aplicativos", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Peça por voz: \"abre o Spotify\", \"toca rock\", \"liga pra minha mãe\", " +
-                                "\"manda no WhatsApp pro André que tô chegando\", \"lê minhas mensagens\".",
-                            color = TextDim,
-                            fontSize = 12.5.sp,
-                            lineHeight = 17.sp,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Avisar quando chegar mensagem (só diz de quem)", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                            Switch(checked = vm.readMessagesAloud, onCheckedChange = { vm.toggleReadMessages() })
-                        }
-                        Text(
-                            "Se o Android disser \"Acesso negado\" / \"configuração restrita\", toque aqui primeiro: o MotoRota se reinstala " +
-                                "pelo instalador oficial e o bloqueio some (seus dados continuam).",
-                            color = TextDim,
-                            fontSize = 12.sp,
-                        )
-                        Button(
-                            onClick = { vm.installUpdate(null) },
-                            enabled = vm.installProgress == null,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(vm.installProgress?.let { "Baixando… $it%" } ?: "Liberar bloqueio (reinstalar pelo MotoRota)")
-                        }
-                        val notifOk = vm.phone.notificationsAllowed()
-                        OutlinedButton(onClick = { vm.phone.openNotificationSettings() }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (notifOk) "Leitura de mensagens: ativada ✓" else "1. Ativar leitura de mensagens")
-                        }
-                        val accOk = com.motorota.assistant.WhatsAppSender.enabled(LocalContext.current)
-                        OutlinedButton(onClick = { vm.phone.openAccessibilitySettings() }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (accOk) "Envio automático no WhatsApp: ativado ✓" else "2. Ativar envio automático no WhatsApp")
-                        }
-                        Text(
-                            "No 2, procure \"MotoRota: Jarvis envia WhatsApp\" em Acessibilidade (às vezes em Apps instalados) e ative. " +
-                                "Ele só toca em Enviar logo depois de você pedir uma mensagem.",
-                            color = TextDim,
-                            fontSize = 12.sp,
-                        )
-                    }
+                Text(
+                    "Informe quantos km sua moto faz por tanque para acompanhar o consumo pelo GPS e receber alertas de reserva.",
+                    color = TextDim,
+                    fontSize = 12.5.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = tankText,
+                        onValueChange = { t -> tankText = t.filter { it.isDigit() }.take(4) },
+                        label = { Text("km por tanque") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { vm.setTank(tankText.toIntOrNull() ?: 0) }) { Text("Salvar") }
                 }
-
-                Surface(
-                    color = SurfaceCard,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val ic = vm.intercom
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Headset, null, tint = NavGreen, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Intercomunicador", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            Text(
-                                if (ic.online) "● online" else "● offline",
-                                color = if (ic.online) NavGreen else TextDim,
-                                fontSize = 12.5.sp,
-                            )
-                        }
-                        Text(
-                            "Fale com amigos que usam o MotoRota pela internet: \"Jarvis, chama o André\". " +
-                                "O Jarvis dele pergunta se pode atender. Funciona com o app aberto.",
-                            color = TextDim,
-                            fontSize = 12.5.sp,
-                            lineHeight = 17.sp,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = nameText,
-                                onValueChange = { nameText = it.take(40) },
-                                label = { Text("Seu nome") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = { scope.launch { icInfo = ic.setName(nameText) } }) { Text("Salvar") }
-                        }
-                        if (ic.myCode.isNotBlank()) {
-                            Text("Seu código: ${ic.myCode}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Text("Passe esse código para os amigos te adicionarem.", color = TextDim, fontSize = 12.sp)
-                        }
-                        HorizontalDivider(color = PanelBorder)
-                        Text("Adicionar amigo", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = friendCode,
-                                onValueChange = { t -> friendCode = t.filter { it.isDigit() }.take(6) },
-                                label = { Text("Código") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedTextField(
-                                value = friendNick,
-                                onValueChange = { friendNick = it.take(30) },
-                                label = { Text("Como chamar") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1.3f),
-                            )
-                        }
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    icInfo = ic.addFriend(friendCode, friendNick)
-                                    if (icInfo.contains("adicionado")) { friendCode = ""; friendNick = "" }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Adicionar") }
-                        if (icInfo.isNotBlank()) Text(icInfo, color = Color(0xFF93C5FD), fontSize = 12.5.sp)
-                        ic.friends.forEach { f ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(f.name, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                                IconButton(onClick = { withMic { vm.message = ic.call(f) } }) {
-                                    Icon(Icons.Rounded.Call, "Chamar ${f.name}", tint = NavGreen)
-                                }
-                                IconButton(onClick = { ic.removeFriend(f.id) }) {
-                                    Icon(Icons.Rounded.DeleteOutline, "Remover ${f.name}", tint = TextDim)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Surface(
-                    color = SurfaceCard,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
-                ) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Mic, null, tint = Color(0xFF22D3EE), modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Assistente Jarvis", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        Text(
-                            "Diga \"Jarvis\" (ou toque no microfone) e peça: \"programa a rota pra Xerém\", " +
-                                "\"quantos radares tem pra frente?\", \"quanto falta?\", \"posto mais perto\"... " +
-                                "Ele também conversa sobre qualquer assunto.",
-                            color = TextDim,
-                            fontSize = 12.5.sp,
-                            lineHeight = 17.sp,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Atender quando eu disser \"Jarvis\"", color = Color.White, fontSize = 14.5.sp)
-                                Text(
-                                    "Ouve só com o app aberto na tela. Na 1ª vez baixa 40 MB (use Wi-Fi).",
-                                    color = TextDim,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Switch(
-                                checked = vm.jarvis.wakeOn,
-                                onCheckedChange = { on -> if (on) withMic { vm.jarvis.setWake(true) } else vm.jarvis.setWake(false) },
-                            )
-                        }
-                        Text("Voz do Jarvis (toque para ouvir)", color = Color.White, fontSize = 14.5.sp)
-                        val voices = PiperVoice.VOICES.map { "piper:${it.first}" to "${it.second} · sem limite, offline" } +
-                            JarvisVoice.VOICES.map { it.first to "${it.second} · Google, poucas por dia" } +
-                            ("celular" to "Voz do celular (robótica)")
-                        vm.voiceDownload?.let { p ->
-                            Text("Baixando a voz… $p%", color = Color(0xFF93C5FD), fontSize = 12.5.sp)
-                        }
-                        voices.forEach { (id, label) ->
-                            val sel = vm.jarvisVoice == id
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (sel) Color(0x3322D3EE) else Color.Transparent)
-                                    .clickable {
-                                        vm.setJarvisVoiceName(id)
-                                        scope.launch { vm.speakAndWait("Olá, eu sou o Jarvis. Em que posso ajudar?") }
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(if (sel) "●" else "○", color = Color(0xFF22D3EE), fontSize = 16.sp)
-                                Spacer(Modifier.width(10.dp))
-                                Text(label, color = Color.White, fontSize = 14.sp)
-                            }
-                        }
-                        OutlinedTextField(
-                            value = groqText,
-                            onValueChange = { groqText = it.trim(); keysSaved = false },
-                            label = { Text(if (Keys.groqBuiltIn) "Chave do Groq (já configurada)" else "Chave do Groq (recomendada: rápida e grátis)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            "Grátis em console.groq.com/keys. O Jarvis usa o Groq primeiro e o Gemini de reserva.",
-                            color = TextDim,
-                            fontSize = 12.sp,
-                        )
-                        OutlinedTextField(
-                            value = geminiText,
-                            onValueChange = { geminiText = it.trim(); keysSaved = false },
-                            label = { Text(if (Keys.geminiBuiltIn) "Chave do Gemini (já configurada)" else "Chave do Gemini (obrigatória)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            "Grátis em aistudio.google.com/apikey (entre com sua conta Google e toque em \"Create API key\").",
-                            color = TextDim,
-                            fontSize = 12.sp,
-                        )
-                        OutlinedTextField(
-                            value = tomtomText,
-                            onValueChange = { tomtomText = it.trim(); keysSaved = false },
-                            label = { Text(if (Keys.tomtomBuiltIn) "Chave da TomTom (já configurada)" else "Chave da TomTom (busca e trânsito)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            "Opcional, mas melhora muito a busca de hotéis, praças e lojas. Grátis em developer.tomtom.com.",
-                            color = TextDim,
-                            fontSize = 12.sp,
-                        )
-                        Button(
-                            onClick = { Keys.save(tomtomText, geminiText); Keys.saveGroq(groqText); keysSaved = true },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (keysSaved) "Chaves salvas ✓" else "Salvar chaves") }
-                        OutlinedButton(
-                            onClick = {
-                                testing = true
-                                testReport = "Testando…"
-                                scope.launch {
-                                    testReport = vm.jarvis.diagnose()
-                                    testing = false
-                                }
-                            },
-                            enabled = !testing,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Testar o Jarvis (conexão com o Gemini)") }
-                        if (testReport.isNotBlank()) {
-                            Text(testReport, color = Color(0xFF93C5FD), fontSize = 12.sp, lineHeight = 16.sp)
-                        }
-                    }
-                }
-
-                Surface(
-                    color = SurfaceCard,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
-                ) {
-                    Row(
-                        Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                if (vm.tankKm > 0) {
+                    Text(
+                        "Rodados: ${vm.kmSinceFill.toInt()} km · Restam ~${(vm.fuelLeftKm ?: 0).coerceAtLeast(0)} km",
+                        color = TextDim,
+                        fontSize = 12.5.sp,
+                    )
+                    Button(
+                        onClick = { vm.refuel() },
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NavGreen, contentColor = Color(0xFF042617)),
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Rounded.Shield, null, tint = NavGreen, modifier = Modifier.size(19.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Áreas de risco conhecidas", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            val n = KnownRisks.all
-                            Text(
-                                "Desvia de ruas internas em ${n.count { it.avoid }} áreas críticas, monitora " +
-                                    "${Corridors.all.size} corredores expressos e prioriza contornos rodoviários seguros " +
-                                    "(com peso reforçado à noite e fins de semana).",
-                                color = TextDim,
-                                fontSize = 12.5.sp,
-                                lineHeight = 17.sp,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Switch(checked = vm.knownRisksOn, onCheckedChange = { vm.toggleKnownRisks() })
+                        Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar", fontSize = 15.sp) } },
-    )
+        }
+    }
+
+    if (show("apps")) {
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Jarvis nos seus aplicativos", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Peça por voz: \"abre o Spotify\", \"toca rock\", \"liga pra minha mãe\", " +
+                        "\"manda no WhatsApp pro André que tô chegando\", \"lê minhas mensagens\".",
+                    color = TextDim,
+                    fontSize = 12.5.sp,
+                    lineHeight = 17.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Avisar quando chegar mensagem (só diz de quem)", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Switch(checked = vm.readMessagesAloud, onCheckedChange = { vm.toggleReadMessages() })
+                }
+                Text(
+                    "Se o Android disser \"Acesso negado\" / \"configuração restrita\", toque aqui primeiro: o MotoRota se reinstala " +
+                        "pelo instalador oficial e o bloqueio some (seus dados continuam).",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
+                Button(
+                    onClick = { vm.installUpdate(null) },
+                    enabled = vm.installProgress == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(vm.installProgress?.let { "Baixando… $it%" } ?: "Liberar bloqueio (reinstalar pelo MotoRota)")
+                }
+                val notifOk = vm.phone.notificationsAllowed()
+                OutlinedButton(onClick = { vm.phone.openNotificationSettings() }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (notifOk) "Leitura de mensagens: ativada ✓" else "1. Ativar leitura de mensagens")
+                }
+                val accOk = com.motorota.assistant.WhatsAppSender.enabled(LocalContext.current)
+                OutlinedButton(onClick = { vm.phone.openAccessibilitySettings() }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (accOk) "Envio automático no WhatsApp: ativado ✓" else "2. Ativar envio automático no WhatsApp")
+                }
+                Text(
+                    "No 2, procure \"MotoRota: Jarvis envia WhatsApp\" em Acessibilidade (às vezes em Apps instalados) e ative. " +
+                        "Ele só toca em Enviar logo depois de você pedir uma mensagem.",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+
+    if (show("intercom")) {
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val ic = vm.intercom
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Headset, null, tint = NavGreen, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Intercomunicador", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(
+                        if (ic.online) "● online" else "● offline",
+                        color = if (ic.online) NavGreen else TextDim,
+                        fontSize = 12.5.sp,
+                    )
+                }
+                Text(
+                    "Fale com amigos que usam o MotoRota pela internet: \"Jarvis, chama o André\". " +
+                        "O Jarvis dele pergunta se pode atender. Funciona com o app aberto.",
+                    color = TextDim,
+                    fontSize = 12.5.sp,
+                    lineHeight = 17.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = nameText,
+                        onValueChange = { nameText = it.take(40) },
+                        label = { Text("Seu nome") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { scope.launch { icInfo = ic.setName(nameText) } }) { Text("Salvar") }
+                }
+                if (ic.myCode.isNotBlank()) {
+                    Text("Seu código: ${ic.myCode}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Passe esse código para os amigos te adicionarem.", color = TextDim, fontSize = 12.sp)
+                }
+                HorizontalDivider(color = PanelBorder)
+                Text("Adicionar amigo", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = friendCode,
+                        onValueChange = { t -> friendCode = t.filter { it.isDigit() }.take(6) },
+                        label = { Text("Código") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedTextField(
+                        value = friendNick,
+                        onValueChange = { friendNick = it.take(30) },
+                        label = { Text("Como chamar") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.3f),
+                    )
+                }
+                Button(
+                    onClick = {
+                        scope.launch {
+                            icInfo = ic.addFriend(friendCode, friendNick)
+                            if (icInfo.contains("adicionado")) { friendCode = ""; friendNick = "" }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Adicionar") }
+                if (icInfo.isNotBlank()) Text(icInfo, color = Color(0xFF93C5FD), fontSize = 12.5.sp)
+                ic.friends.forEach { f ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(f.name, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { withMic { vm.message = ic.call(f) } }) {
+                            Icon(Icons.Rounded.Call, "Chamar ${f.name}", tint = NavGreen)
+                        }
+                        IconButton(onClick = { ic.removeFriend(f.id) }) {
+                            Icon(Icons.Rounded.DeleteOutline, "Remover ${f.name}", tint = TextDim)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (show("jarvis")) {
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Mic, null, tint = Color(0xFF22D3EE), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Assistente Jarvis", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Text(
+                    "Diga \"Jarvis\" (ou toque no microfone) e peça: \"programa a rota pra Xerém\", " +
+                        "\"quantos radares tem pra frente?\", \"quanto falta?\", \"posto mais perto\"... " +
+                        "Ele também conversa sobre qualquer assunto.",
+                    color = TextDim,
+                    fontSize = 12.5.sp,
+                    lineHeight = 17.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Atender quando eu disser \"Jarvis\"", color = Color.White, fontSize = 14.5.sp)
+                        Text(
+                            "Ouve só com o app aberto na tela. Na 1ª vez baixa 40 MB (use Wi-Fi).",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = vm.jarvis.wakeOn,
+                        onCheckedChange = { on -> if (on) withMic { vm.jarvis.setWake(true) } else vm.jarvis.setWake(false) },
+                    )
+                }
+                Text("Voz do Jarvis (toque para ouvir)", color = Color.White, fontSize = 14.5.sp)
+                val voices = PiperVoice.VOICES.map { "piper:${it.first}" to "${it.second} · sem limite, offline" } +
+                    JarvisVoice.VOICES.map { it.first to "${it.second} · Google, poucas por dia" } +
+                    ("celular" to "Voz do celular (robótica)")
+                vm.voiceDownload?.let { p ->
+                    Text("Baixando a voz… $p%", color = Color(0xFF93C5FD), fontSize = 12.5.sp)
+                }
+                voices.forEach { (id, label) ->
+                    val sel = vm.jarvisVoice == id
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (sel) Color(0x3322D3EE) else Color.Transparent)
+                            .clickable {
+                                vm.setJarvisVoiceName(id)
+                                scope.launch { vm.speakAndWait("Olá, eu sou o Jarvis. Em que posso ajudar?") }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (sel) "●" else "○", color = Color(0xFF22D3EE), fontSize = 16.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(label, color = Color.White, fontSize = 14.sp)
+                    }
+                }
+                OutlinedTextField(
+                    value = groqText,
+                    onValueChange = { groqText = it.trim(); keysSaved = false },
+                    label = { Text(if (Keys.groqBuiltIn) "Chave do Groq (já configurada)" else "Chave do Groq (recomendada: rápida e grátis)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Grátis em console.groq.com/keys. O Jarvis usa o Groq primeiro e o Gemini de reserva.",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
+                OutlinedTextField(
+                    value = geminiText,
+                    onValueChange = { geminiText = it.trim(); keysSaved = false },
+                    label = { Text(if (Keys.geminiBuiltIn) "Chave do Gemini (já configurada)" else "Chave do Gemini (obrigatória)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Grátis em aistudio.google.com/apikey (entre com sua conta Google e toque em \"Create API key\").",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
+                OutlinedTextField(
+                    value = tomtomText,
+                    onValueChange = { tomtomText = it.trim(); keysSaved = false },
+                    label = { Text(if (Keys.tomtomBuiltIn) "Chave da TomTom (já configurada)" else "Chave da TomTom (busca e trânsito)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Opcional, mas melhora muito a busca de hotéis, praças e lojas. Grátis em developer.tomtom.com.",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
+                Button(
+                    onClick = { Keys.save(tomtomText, geminiText); Keys.saveGroq(groqText); keysSaved = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (keysSaved) "Chaves salvas ✓" else "Salvar chaves") }
+                OutlinedButton(
+                    onClick = {
+                        testing = true
+                        testReport = "Testando…"
+                        scope.launch {
+                            testReport = vm.jarvis.diagnose()
+                            testing = false
+                        }
+                    },
+                    enabled = !testing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Testar o Jarvis (conexão com o Gemini)") }
+                if (testReport.isNotBlank()) {
+                    Text(testReport, color = Color(0xFF93C5FD), fontSize = 12.sp, lineHeight = 16.sp)
+                }
+            }
+        }
+    }
+
+    if (show("navegacao")) {
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
+            Row(
+                Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Shield, null, tint = NavGreen, modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Áreas de risco conhecidas", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    val n = KnownRisks.all
+                    Text(
+                        "Desvia de ruas internas em ${n.count { it.avoid }} áreas críticas, monitora " +
+                            "${Corridors.all.size} corredores expressos e prioriza contornos rodoviários seguros " +
+                            "(com peso reforçado à noite e fins de semana).",
+                        color = TextDim,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(checked = vm.knownRisksOn, onCheckedChange = { vm.toggleKnownRisks() })
+            }
+        }
+    }
 }
