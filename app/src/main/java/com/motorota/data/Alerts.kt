@@ -40,8 +40,39 @@ class RadarStore(private val ctx: Context) {
             }
         } catch (_: Exception) {
         }
+        // radares que o piloto marcou (ficam para sempre, somados aos do mapa)
+        for (r in loadUser()) {
+            list.add(r)
+            nextGrid.getOrPut(cell(r.point.lat, r.point.lon)) { ArrayList() }.add(r)
+        }
         this.grid = nextGrid
         all = list
+    }
+
+    private val userFile get() = java.io.File(ctx.filesDir, "radares_usuario.csv")
+
+    private fun loadUser(): List<Radar> = try {
+        if (!userFile.exists()) emptyList() else userFile.readLines().mapNotNull { line ->
+            val p = line.split(',')
+            val lat = p.getOrNull(0)?.toDoubleOrNull() ?: return@mapNotNull null
+            val lon = p.getOrNull(1)?.toDoubleOrNull() ?: return@mapNotNull null
+            Radar(GeoPoint(lat, lon), p.getOrNull(2)?.toIntOrNull() ?: 0, null)
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** O piloto marcou um radar que não estava no mapa. Devolve false se já existia um ali perto. */
+    @Synchronized
+    fun addUser(p: GeoPoint, limitKmh: Int): Boolean {
+        if (near(p).any { it.point.distanceTo(p) < 60 }) return false
+        userFile.appendText("${p.lat},${p.lon},$limitKmh\n")
+        val r = Radar(p, limitKmh, null)
+        val g = HashMap(grid)
+        g.getOrPut(cell(p.lat, p.lon)) { ArrayList() }.add(r)
+        grid = g
+        all = all + r
+        return true
     }
 
     /** Radares a até ~1 km do ponto (consulta rápida por grade de 0,01 grau). */

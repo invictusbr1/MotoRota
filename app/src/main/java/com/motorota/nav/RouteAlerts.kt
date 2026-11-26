@@ -41,7 +41,8 @@ object RouteAlerts {
             cand.addAll(radars.near(pts[i])); i += 3
         }
         for (r in cand) {
-            val hit = project(route, r.point, 30.0) ?: continue
+            // no mapa o radar costuma estar marcado na calçada/canteiro: até 40 m da linha da rota
+            val hit = project(route, r.point, 40.0) ?: continue
             if (r.directionDeg != null) {
                 val diff = angleDiff(hit.bearing, r.directionDeg.toDouble())
                 if (diff > 70) continue // radar do outro sentido

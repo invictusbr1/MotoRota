@@ -22,6 +22,7 @@ import com.motorota.intercom.Intercom
 import android.media.AudioAttributes
 import com.motorota.data.Corridor
 import com.motorota.data.Keys
+import com.motorota.data.Http
 import com.motorota.data.Corridors
 import com.motorota.data.Geocoder
 import com.motorota.data.Hazard
@@ -1209,9 +1210,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         ) { a -> jarvisAddStop(a.optString("lugar")) },
         Tool(
             "radares_a_frente",
-            "Conta os radares de velocidade à frente e diz a distância e o limite de cada um. Navegando, considera só os que estão na rota; sem rota, os que estão em volta.",
+            "Conta os radares de velocidade no caminho da rota traçada (navegando: daqui até o destino) e diz a distância e o limite de cada um. Sem rota, conta os que estão em volta.",
             mapOf("distancia_km" to ("NUMBER" to "até quantos km à frente olhar; não envie para considerar a rota inteira")),
         ) { a -> jarvisRadars(a) },
+        Tool(
+            "marcar_radar",
+            "Salva um radar fixo na posição atual do piloto (para radares que faltam no mapa). Use quando ele disser \"marca um radar aqui\".",
+            mapOf("limite_kmh" to ("NUMBER" to "limite de velocidade do radar, se o piloto disser")),
+        ) { a -> jarvisMarkRadar(a) },
         Tool(
             "situacao_da_viagem",
             "Quanto falta (distância e tempo), hora prevista de chegada, próxima manobra, velocidade, limite da via, próximos alertas, trânsito, clima e autonomia do tanque.",
@@ -1289,32 +1295,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return "Parada em ${p.name} (${p.detail}) adicionada. A rota está sendo recalculada."
     }
 
-    private suspend fun jarvisRadars(a: JSONObject): String = withContext(Dispatchers.Main) {
+    private suspend fun jarvisRadars(a: JSONObject): String {
         val km = if (a.has("distancia_km")) a.optDouble("distancia_km", -1.0) else -1.0
-        val st = navState
-        if (navigating && st != null) {
+        val route = withContext(Dispatchers.Main) { currentRoute ?: navigator?.route }
+        val fromM = withContext(Dispatchers.Main) { if (navigating) navState?.alongM ?: 0.0 else 0.0 }
+        if (route != null && route.points.size > 1) {
+            // calcula na hora, em cima da rota atual (não depende da lista de alertas já estar pronta)
+            val all = withContext(Dispatchers.Default) { alertsOn(route) }
             val maxM = if (km > 0) km * 1000 else Double.MAX_VALUE
-            val ahead = alongAlerts
-                .filter { it.isRadar && it.posM > st.alongM && it.posM - st.alongM <= maxM }
-                .sortedBy { it.posM }
-            val faixa = if (km > 0) "nos próximos ${formatDistance(km * 1000)}" else "até o destino"
-            if (ahead.isEmpty()) "Nenhum radar na rota $faixa."
-            else "${ahead.size} radar(es) na rota $faixa: " + ahead.take(6).joinToString("; ") {
-                "a ${formatDistance(it.posM - st.alongM)}" + if (it.limitKmh > 0) ", limite ${it.limitKmh}" else ""
-            } + "."
-        } else {
+            val ahead = all.filter { it.isRadar && it.posM > fromM && it.posM - fromM <= maxM }.sortedBy { it.posM }
+            val faixa = when {
+                km > 0 -> "nos próximos ${formatDistance(km * 1000)} da rota"
+                fromM > 0 -> "daqui até o destino"
+                else -> "no caminho inteiro"
+            }
+            Http.report("jarvis-radares", "rota ${formatDistance(route.distanceM.toDouble())}, achou ${ahead.size} radares $faixa")
+            return if (ahead.isEmpty()) {
+                "Nenhum radar cadastrado $faixa. Se você conhece algum, quando passar por ele diga \"Jarvis, marca um radar aqui\"."
+            } else {
+                "${ahead.size} radar(es) $faixa: " + ahead.take(8).joinToString("; ") {
+                    "a ${formatDistance(it.posM - fromM)}" + if (it.limitKmh > 0) ", limite ${it.limitKmh}" else ""
+                } + "."
+            }
+        }
+        return withContext(Dispatchers.Main) {
             val me = myLocation ?: return@withContext "Estou sem GPS agora."
             val raio = (if (km > 0) km else 5.0) * 1000
             val near = radarStore.all
                 .map { it to it.point.distanceTo(me) }
                 .filter { it.second <= raio }
                 .sortedBy { it.second }
-            val faixa = "num raio de ${formatDistance(raio)} (sem rota ativa, então não sei quais estão no seu caminho)"
+            val faixa = "num raio de ${formatDistance(raio)} (sem rota traçada, então não sei quais estão no seu caminho)"
             if (near.isEmpty()) "Nenhum radar $faixa."
             else "${near.size} radar(es) $faixa. Os mais perto: " + near.take(4).joinToString("; ") { (r, d) ->
                 "a ${formatDistance(d)}" + if (r.limitKmh > 0) ", limite ${r.limitKmh}" else ""
             } + "."
         }
+    }
+
+    private suspend fun jarvisMarkRadar(a: JSONObject): String = withContext(Dispatchers.Main) {
+        val me = myLocation ?: return@withContext "Estou sem GPS agora, não consigo marcar."
+        val lim = a.optInt("limite_kmh", 0).coerceIn(0, 150)
+        val added = withContext(Dispatchers.IO) { radarStore.addUser(me, lim) }
+        if (!added) return@withContext "Já tenho um radar marcado bem aqui."
+        radarsVersion++
+        currentRoute?.let { if (navigating) refreshAlertsAsync(it) }
+        "Radar marcado aqui" + (if (lim > 0) ", limite $lim" else "") + ". Vou avisar sempre que passar por ele."
     }
 
     private suspend fun jarvisStatus(): String = withContext(Dispatchers.Main) {

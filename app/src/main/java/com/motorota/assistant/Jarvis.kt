@@ -154,16 +154,19 @@ class Jarvis(
                     notify("Sem permissão de microfone ou sem reconhecimento de voz do Google no celular.")
                     return@launch
                 }
-                var again = true
+                // Conversa contínua: depois de cada resposta ele continua ouvindo, sem precisar
+                // chamar "Jarvis" de novo. Se o piloto ficar quieto, ele sai sozinho.
                 var rounds = 0
-                while (again && rounds < 3) {
+                var retried = false
+                while (rounds < 12) {
                     rounds++
-                    again = false
                     status = JarvisStatus.LISTENING
                     heard = ""
-                    reply = ""
-                    replyVersion++
-                    beep()
+                    if (rounds == 1) {
+                        reply = ""
+                        replyVersion++
+                    }
+                    beep(followUp = rounds > 1)
                     delay(180)
                     beforeListen()
                     val text = try {
@@ -172,22 +175,28 @@ class Jarvis(
                         afterListen()
                     }
                     if (text.isBlank()) {
-                        if (!fromWake || rounds > 1) break
-                        status = JarvisStatus.SPEAKING
-                        speak("Não ouvi. Pode repetir?")
-                        again = true
-                        continue
+                        // na primeira vez pede para repetir; depois, silêncio = fim da conversa
+                        if (rounds == 1 && fromWake && !retried) {
+                            retried = true
+                            rounds = 0
+                            status = JarvisStatus.SPEAKING
+                            speak("Não ouvi. Pode repetir?")
+                            continue
+                        }
+                        endTone()
+                        break
                     }
                     heard = text
                     if (isGoodbye(text)) {
                         reply = "Beleza, tô aqui se precisar."
+                        replyVersion++
                         status = JarvisStatus.SPEAKING
                         speak(reply)
                         break
                     }
                     status = JarvisStatus.THINKING
                     val answer = try {
-                        // roda à parte: se o Google travar, o Jarvis desiste em 35 s em vez de ficar "pensando" para sempre
+                        // roda à parte: se o Google travar, o Jarvis desiste em vez de ficar "pensando" para sempre
                         val prompt = systemPrompt()
                         val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { brain.ask(key, prompt, text) }
                         kotlinx.coroutines.withTimeoutOrNull(55_000) { job.await() } ?: run {
@@ -205,8 +214,6 @@ class Jarvis(
                     replyVersion++
                     status = JarvisStatus.SPEAKING
                     speak(reply)
-                    // se o Jarvis fez uma pergunta, já ouve a resposta sem precisar chamar de novo
-                    again = reply.trimEnd().endsWith("?")
                 }
             } finally {
                 status = JarvisStatus.OFF
@@ -286,16 +293,27 @@ class Jarvis(
     private fun isGoodbye(t: String): Boolean {
         val s = t.lowercase()
         return s == "nada" || s.startsWith("nada não") || s.startsWith("deixa") || s.startsWith("cancela") ||
-            s.startsWith("esquece") || s == "obrigado" || s == "valeu"
+            s.startsWith("esquece") || s == "obrigado" || s == "valeu" || s == "obrigado jarvis" ||
+            s == "valeu jarvis" || s.startsWith("tchau") || s == "só isso" || s == "é só isso"
     }
 
     /** Tira marcações que ficariam estranhas faladas (asteriscos, listas...). */
     private fun clean(s: String) = s.replace(Regex("[*#_`]"), "").replace(Regex("\\s+"), " ").trim()
 
-    private fun beep() {
+    /** bip de "pode falar" (mais curto e baixo quando é continuação da conversa) */
+    private fun beep(followUp: Boolean = false) {
         runCatching {
-            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
-            tg.startTone(ToneGenerator.TONE_PROP_BEEP2, 160)
+            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, if (followUp) 45 else 70)
+            tg.startTone(if (followUp) ToneGenerator.TONE_PROP_BEEP else ToneGenerator.TONE_PROP_BEEP2, if (followUp) 90 else 160)
+            scope.launch { delay(400); tg.release() }
+        }
+    }
+
+    /** som de "encerrei a conversa" */
+    private fun endTone() {
+        runCatching {
+            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 40)
+            tg.startTone(ToneGenerator.TONE_PROP_ACK, 150)
             scope.launch { delay(400); tg.release() }
         }
     }
