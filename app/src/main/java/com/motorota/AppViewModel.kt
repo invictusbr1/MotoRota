@@ -15,6 +15,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.speech.tts.UtteranceProgressListener
 import com.motorota.assistant.Jarvis
+import com.motorota.assistant.JarvisVoice
 import com.motorota.assistant.Tool
 import com.motorota.intercom.CallState
 import com.motorota.intercom.Intercom
@@ -326,6 +327,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tts = TextToSpeech(app) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("pt", "BR")
+                tts?.setPitch(0.9f) // um pouco mais grave
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {
@@ -1089,7 +1091,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Fala e só volta quando terminar (o Jarvis espera para voltar a ouvir). Ignora o "mudo" dos avisos. */
+    /** voz do Jarvis: nome de uma voz do Google (Gemini) ou "celular" (voz do próprio Android) */
+    var jarvisVoice by mutableStateOf(prefs.getString("jarvis_voz", "Charon") ?: "Charon"); private set
+    fun setJarvisVoiceName(v: String) {
+        jarvisVoice = v
+        prefs.edit().putString("jarvis_voz", v).apply()
+    }
+
     suspend fun speakAndWait(text: String) {
+        if (text.isBlank()) return
+        // Voz natural do Google; se não der (sem internet, limite), cai na voz do celular
+        if (jarvisVoice != "celular" && Keys.gemini.isNotBlank()) {
+            val audio = runCatching { JarvisVoice.synth(Keys.gemini, text, jarvisVoice) }.getOrNull()
+            if (audio != null) {
+                tts?.stop()
+                lastUrgentSpeechMs = SystemClock.elapsedRealtime()
+                val inCall = intercomDelegate.isInitialized() && intercom.inCall
+                runCatching { JarvisVoice.play(audio, inCall) }
+                return
+            }
+        }
         val t = tts ?: return
         if (!ttsReady || text.isBlank()) return
         val id = "jarvis-${++speechSeq}"

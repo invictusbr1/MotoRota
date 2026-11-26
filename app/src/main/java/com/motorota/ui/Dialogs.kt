@@ -2,6 +2,7 @@ package com.motorota.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -69,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
 import com.motorota.data.Keys
+import com.motorota.assistant.JarvisVoice
 import com.motorota.R
 import com.motorota.data.Corridors
 import com.motorota.data.HazardType
@@ -685,6 +687,26 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                                 checked = vm.jarvis.wakeOn,
                                 onCheckedChange = { on -> if (on) withMic { vm.jarvis.setWake(true) } else vm.jarvis.setWake(false) },
                             )
+                        }
+                        Text("Voz do Jarvis (toque para ouvir)", color = Color.White, fontSize = 14.5.sp)
+                        (JarvisVoice.VOICES + ("celular" to "Voz do celular (sem internet)")).forEach { (id, label) ->
+                            val sel = vm.jarvisVoice == id
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (sel) Color(0x3322D3EE) else Color.Transparent)
+                                    .clickable {
+                                        vm.setJarvisVoiceName(id)
+                                        scope.launch { vm.speakAndWait("Olá, eu sou o Jarvis. Em que posso ajudar?") }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(if (sel) "●" else "○", color = Color(0xFF22D3EE), fontSize = 16.sp)
+                                Spacer(Modifier.width(10.dp))
+                                Text(label, color = Color.White, fontSize = 14.sp)
+                            }
                         }
                         OutlinedTextField(
                             value = geminiText,
