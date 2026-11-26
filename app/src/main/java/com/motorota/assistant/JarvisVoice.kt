@@ -26,15 +26,31 @@ object JarvisVoice {
         "Algenib" to "Algenib (rouca)",
     )
 
-    private val MODELS = listOf("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-2.5-flash-preview-tts")
+    // o "lite" gera mais rápido e tem cota própria; se um esgotar, usa o outro (mesma voz)
+    private val MODELS = listOf("gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts")
     private var workingModel: String? = null
+    /** modelos que estouraram a cota grátis, e até quando evitar */
+    private val exhausted = HashMap<String, Long>()
+
+    /** frases já geradas (as repetidas, como "Não ouvi", saem na hora e não gastam cota) */
+    private val cache = object : LinkedHashMap<String, Audio>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Audio>?) = size > 40
+    }
+
+    /** a última falha foi por limite grátis (para avisar o piloto uma vez) */
+    @Volatile var quotaHit = false; private set
 
     /** Áudio PCM 16 bits mono + taxa de amostragem, ou null se não deu. */
     class Audio(val pcm: ByteArray, val rate: Int)
 
     suspend fun synth(key: String, text: String, voice: String): Audio? = withContext(Dispatchers.IO) {
         if (key.isBlank() || text.isBlank()) return@withContext null
-        val models = listOfNotNull(workingModel) + MODELS.filter { it != workingModel }
+        val cacheKey = "$voice|$text"
+        synchronized(cache) { cache[cacheKey] }?.let { return@withContext it }
+        val now = System.currentTimeMillis()
+        val models = (listOfNotNull(workingModel) + MODELS.filter { it != workingModel })
+            .filter { (exhausted[it] ?: 0L) < now }
+        quotaHit = false
         for (model in models) {
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))))
@@ -54,6 +70,13 @@ object JarvisVoice {
                 mapOf("x-goog-api-key" to key), body.toString(), readTimeoutMs = 12_000,
             )
             if (r.code == 404 || r.code == 400) continue // modelo indisponível para esta chave: tenta o próximo
+            if (r.code == 429 || r.code == 503) {
+                // cota grátis deste modelo acabou (ou está sobrecarregado): tenta o próximo, com a mesma voz
+                exhausted[model] = now + if (r.code == 429) 30 * 60_000L else 60_000L
+                if (r.code == 429) quotaHit = true
+                Http.report("jarvis-voz", "$model -> ${r.code} ${r.reason()}")
+                continue
+            }
             if (!r.ok) {
                 Http.report("jarvis-voz", "$model -> ${r.code} ${r.reason()} | ${r.text.take(300)}")
                 return@withContext null
@@ -64,7 +87,10 @@ object JarvisVoice {
             val bytes = Base64.decode(part.optString("data"), Base64.DEFAULT)
             val mime = part.optString("mimeType")
             workingModel = model
-            return@withContext decode(bytes, mime)
+            quotaHit = false
+            val audio = decode(bytes, mime)
+            if (audio != null && text.length < 160) synchronized(cache) { cache[cacheKey] = audio }
+            return@withContext audio
         }
         null
     }

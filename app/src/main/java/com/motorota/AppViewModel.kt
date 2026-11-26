@@ -724,6 +724,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             "Faltam ${formatDistance(r.distanceM.toDouble())} (${formatDuration(r.timeS)})",
         )
         say("Vamos lá. Rota ${r.mode.label.lowercase()}.", urgent = true)
+        copilotBriefing(r)
     }
 
     fun stopNavigation(arrived: Boolean = false) {
@@ -1099,11 +1100,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("jarvis_voz", v).apply()
     }
 
+    private var voiceQuotaWarned = false
+
+    /** Copiloto: ao sair, avisa se o combustível não dá para a viagem ou se ela é longa. */
+    private fun copilotBriefing(r: RouteResult) {
+        val fuel = fuelLeftKm
+        val km = r.distanceM / 1000
+        val tips = ArrayList<String>()
+        if (fuel != null && fuel - 25 < km) {
+            tips.add("Sua autonomia é de uns $fuel quilômetros e a rota tem $km. Vai precisar abastecer no caminho; me pergunte onde quando quiser.")
+        }
+        if (r.timeS > 2 * 3600) tips.add("Viagem de ${formatDuration(r.timeS)}. Bom fazer uma pausa a cada duas horas.")
+        if (tips.isEmpty()) return
+        viewModelScope.launch {
+            delay(3500) // depois do "Vamos lá"
+            if (navigating) speakAndWait(tips.joinToString(" "))
+        }
+    }
+
     suspend fun speakAndWait(text: String) {
         if (text.isBlank()) return
         // Voz natural do Google; se não der (sem internet, limite), cai na voz do celular
         if (jarvisVoice != "celular" && Keys.gemini.isNotBlank()) {
             val audio = runCatching { JarvisVoice.synth(Keys.gemini, text, jarvisVoice) }.getOrNull()
+            if (audio == null && JarvisVoice.quotaHit && !voiceQuotaWarned) {
+                voiceQuotaWarned = true
+                message = "A voz do Google atingiu o limite grátis por agora. O Jarvis usa a voz do celular até liberar."
+            }
             if (audio != null) {
                 tts?.stop()
                 lastUrgentSpeechMs = SystemClock.elapsedRealtime()
@@ -1134,7 +1157,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             else -> "sem rota no momento"
         }
         return """
-            Você é o Jarvis, o assistente de voz do MotoRota, um app de navegação para moto. Quem fala com você é o piloto, de capacete, pilotando.
+            Você é o Jarvis, o copiloto de voz do MotoRota, um app de navegação para moto. Quem fala com você é o piloto, de capacete, pilotando.
+            Pense como um motociclista experiente de estrada: além de responder, antecipe o que importa na viagem (combustível, descanso, clima, pôr do sol, trechos perigosos, radares) e dê a recomendação prática, como um parceiro de viagem faria. Ex.: "Sua autonomia dá uns 100 km e faltam 200; eu abasteceria no posto daqui a 60 km, descansava 15 minutos e seguia."
+            Para combustível e paradas use a função planejar_abastecimento_e_paradas; nunca chute autonomia.
             Regras:
             - Responda sempre em português do Brasil, de forma natural e curta (1 a 3 frases), porque a resposta é falada no capacete.
             - Nada de markdown, listas, asteriscos ou emojis. Fale números de um jeito natural (ex.: "dois radares, o primeiro a 800 metros").
@@ -1219,6 +1244,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             "Salva um radar fixo na posição atual do piloto (para radares que faltam no mapa). Use quando ele disser \"marca um radar aqui\".",
             mapOf("limite_kmh" to ("NUMBER" to "limite de velocidade do radar, se o piloto disser")),
         ) { a -> jarvisMarkRadar(a) },
+        Tool(
+            "planejar_abastecimento_e_paradas",
+            "Copiloto: cruza a autonomia do tanque com o que falta da rota e o tempo de viagem; diz se precisa abastecer, em que ponto da rota e quais postos há perto desse ponto, e quando descansar.",
+        ) { _ -> jarvisFuelPlan() },
         Tool(
             "situacao_da_viagem",
             "Quanto falta (distância e tempo), hora prevista de chegada, próxima manobra, velocidade, limite da via, próximos alertas, trânsito, clima e autonomia do tanque.",
@@ -1334,6 +1363,61 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 "a ${formatDistance(d)}" + if (r.limitKmh > 0) ", limite ${r.limitKmh}" else ""
             } + "."
         }
+    }
+
+    /** Ponto da rota a `m` metros do início. */
+    private fun pointAt(r: RouteResult, m: Double): GeoPoint {
+        val i = r.cumDist.indexOfFirst { it >= m }.let { if (it < 0) r.points.size - 1 else it }
+        return r.points[i.coerceIn(0, r.points.size - 1)]
+    }
+
+    private suspend fun jarvisFuelPlan(): String {
+        data class Snap(val r: RouteResult?, val from: Double, val remM: Double, val remS: Int, val fuel: Int?, val tank: Int, val elapsedS: Long)
+        val snap = withContext(Dispatchers.Main) {
+            val r = currentRoute ?: navigator?.route
+            val st = navState
+            Snap(
+                r,
+                if (navigating && st != null) st.alongM else 0.0,
+                if (navigating && st != null) st.remainingM else (r?.distanceM?.toDouble() ?: 0.0),
+                if (navigating && st != null) st.remainingS else (r?.timeS ?: 0),
+                fuelLeftKm, tankKm, if (navigating) tripElapsedS else 0L,
+            )
+        }
+        val sb = StringBuilder()
+        val remKm = snap.remM / 1000
+        if (snap.r == null) sb.append("Sem rota traçada. ")
+        else sb.append("Faltam ${remKm.toInt()} km, cerca de ${formatDuration(snap.remS)}. ")
+        if (snap.fuel == null) {
+            sb.append("A autonomia do tanque não está configurada (Ajustes, Autonomia do tanque), então não sei quanto combustível resta. ")
+        } else {
+            sb.append("Autonomia estimada: ${snap.fuel} km (tanque cheio faz ${snap.tank} km). ")
+            val margin = 25 // km de reserva que um piloto prudente mantém
+            if (snap.r != null && snap.fuel - margin < remKm) {
+                val stopKm = (snap.fuel - margin).coerceAtLeast(5)
+                val atM = snap.from + stopKm * 1000.0
+                sb.append("Precisa abastecer no caminho: o ideal é por volta de $stopKm km daqui, antes de entrar na reserva. ")
+                val where = pointAt(snap.r, atM)
+                val postos = runCatching { Geocoder.search("posto de gasolina", where) }.getOrDefault(emptyList())
+                    .filter { it.point.distanceTo(where) < 15_000 }.take(3)
+                if (postos.isNotEmpty()) {
+                    sb.append("Postos perto desse ponto: " + postos.joinToString("; ") {
+                        "${it.name} (a ${formatDistance(it.point.distanceTo(where))} do ponto ideal)"
+                    } + ". ")
+                } else sb.append("Não achei posto cadastrado perto desse ponto; abasteça no primeiro que aparecer antes dele. ")
+            } else if (snap.r != null) {
+                sb.append("Dá para chegar sem abastecer, sobrando uns ${(snap.fuel - remKm).toInt()} km. ")
+            }
+        }
+        // descanso: a cada ~2 h de moto
+        val totalS = snap.elapsedS + snap.remS
+        if (totalS > 2 * 3600) {
+            val nextRestS = (2 * 3600 - snap.elapsedS % (2 * 3600)).coerceAtLeast(0)
+            sb.append("Viagem longa: recomendo parar uns 15 minutos a cada 2 horas; a próxima parada seria em uns ${formatDuration(nextRestS.toInt())}. ")
+        }
+        routeWeather?.rainText?.let { sb.append("Clima: $it. ") }
+        routeWeather?.sunsetText?.let { sb.append("$it. ") }
+        return sb.toString()
     }
 
     private suspend fun jarvisMarkRadar(a: JSONObject): String = withContext(Dispatchers.Main) {

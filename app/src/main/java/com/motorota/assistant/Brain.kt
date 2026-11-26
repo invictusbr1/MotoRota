@@ -27,8 +27,8 @@ class Brain(private val tools: List<Tool>) {
     private var workingModel: String? = null
     /** null = ainda não sabe; true/false = já descobriu qual serviço do Google funciona com a chave */
     private var useVertex: Boolean? = null
-    /** o modelo aceita configurar o nível de raciocínio? */
-    private var thinkingCfgOk = true
+    /** nível de raciocínio que cada modelo aceita (descoberto na prática e memorizado) */
+    private val thinking = HashMap<String, Int>() // índice em THINK_LEVELS
 
     fun reset() = history.clear()
 
@@ -109,7 +109,7 @@ class Brain(private val tools: List<Tool>) {
         var lastErr = "sem resposta"
         for (model in models) {
             var attempt = 0
-            while (attempt < 2) {
+            while (attempt < 4) {
                 attempt++
                 val body = JSONObject()
                     .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
@@ -134,10 +134,16 @@ class Brain(private val tools: List<Tool>) {
                         workingModel = model
                         return JSONObject(r.text)
                     }
-                    // o modelo não aceitou a configuração de raciocínio: tenta de novo sem ela
-                    r.code == 400 && r.text.contains("think", ignoreCase = true) && thinkingCfgOk -> {
-                        thinkingCfgOk = false
+                    // o modelo não aceitou esse nível de raciocínio: tenta o próximo nível (minimal -> low -> sem config)
+                    r.code == 400 && r.text.contains("think", ignoreCase = true) && (thinking[model] ?: 0) < THINK_LEVELS.size -> {
+                        thinking[model] = (thinking[model] ?: 0) + 1
+                        attempt = 0
                         continue
+                    }
+                    // sobrecarregado / limite deste modelo: passa para o próximo modelo na hora
+                    r.code == 503 || r.code == 429 && models.last() != model -> {
+                        lastErr = r.reason()
+                        break
                     }
                     r.code < 0 -> {
                         // demorou demais ou caiu: tenta um modelo mais leve antes de desistir
@@ -163,9 +169,12 @@ class Brain(private val tools: List<Tool>) {
     /** Pede pouco "raciocínio" para o Jarvis responder rápido (é conversa de capacete, não prova de matemática). */
     private fun genConfig(model: String): JSONObject {
         val gen = JSONObject().put("temperature", 0.6).put("maxOutputTokens", 1024)
-        if (thinkingCfgOk) {
-            if (model.startsWith("gemini-2.5")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
-            else gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+        if (model.startsWith("gemini-2.5")) {
+            if ((thinking[model] ?: 0) == 0) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        } else {
+            THINK_LEVELS.getOrNull(thinking[model] ?: 0)?.let {
+                gen.put("thinkingConfig", JSONObject().put("thinkingLevel", it))
+            }
         }
         return gen
     }
@@ -235,7 +244,7 @@ class Brain(private val tools: List<Tool>) {
 
     private fun post(url: String, key: String?, body: String): com.motorota.data.HttpResult {
         val headers = if (key != null) mapOf("x-goog-api-key" to key) else emptyMap()
-        val r = com.motorota.data.Http.request(url, "POST", headers, body, readTimeoutMs = 25_000)
+        val r = com.motorota.data.Http.request(url, "POST", headers, body, readTimeoutMs = 18_000)
         if (!r.ok) {
             com.motorota.data.Http.report(
                 "jarvis",
@@ -246,9 +255,11 @@ class Brain(private val tools: List<Tool>) {
     }
 
     companion object {
+        private val THINK_LEVELS = listOf("minimal", "low")
         // do mais novo para o mais antigo; o primeiro que existir na conta fica memorizado
         private val MODELS = listOf(
-            "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest",
+            // o "lite" responde bem mais rápido e tem cota maior: ideal para conversa no capacete
+            "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-flash-latest",
             "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash",
         )
     }

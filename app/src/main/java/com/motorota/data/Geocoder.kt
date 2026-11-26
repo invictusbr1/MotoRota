@@ -11,7 +11,8 @@ import org.json.JSONObject
 import java.net.URLEncoder
 import java.text.Normalizer
 
-data class Place(val name: String, val detail: String, val point: GeoPoint)
+/** area = bairro, cidade, região (e não um comércio ou uma rua) */
+data class Place(val name: String, val detail: String, val point: GeoPoint, val area: Boolean = false)
 
 /**
  * Busca de endereços e lugares (hotel, praça, posto, loja...).
@@ -102,7 +103,14 @@ object Geocoder {
             }
         }
         val dist: (Place) -> Double = { p -> near?.distanceTo(p.point) ?: 0.0 }
-        return list.sortedWith(compareByDescending<Place> { nameScore(it) }.thenBy { dist(it) })
+        // se o pedido não é de comércio ("restaurante", "posto"...), entre nomes iguais vale o bairro/cidade
+        val wantsBusiness = Regex("restaurante|posto|hotel|bar|loja|mercado|farmacia|oficina|padaria|lanchonete|pizzaria|shopping|hospital|banco")
+            .containsMatchIn(q)
+        return list.sortedWith(
+            compareByDescending<Place> { nameScore(it) }
+                .thenByDescending { if (wantsBusiness) 0 else if (it.area) 1 else 0 }
+                .thenBy { dist(it) },
+        )
     }
 
     /** Remove o mesmo lugar vindo das duas fontes (mesmo nome a menos de 150 m, ou praticamente o mesmo ponto). */
@@ -167,7 +175,7 @@ object Geocoder {
                 addr.optString("municipality"),
                 addr.optString("countrySubdivisionCode").ifBlank { addr.optString("countrySubdivision") },
             ).filter { it.isNotBlank() && !it.equals(name, ignoreCase = true) }.distinct().joinToString(" · ")
-            out.add(Place(name, detail, GeoPoint(pos.getDouble("lat"), pos.getDouble("lon"))))
+            out.add(Place(name, detail, GeoPoint(pos.getDouble("lat"), pos.getDouble("lon")), area = r.optString("type") == "Geography"))
         }
         return out
     }
@@ -203,7 +211,8 @@ object Geocoder {
                 p.optString("city").takeIf { it.isNotBlank() },
                 p.optString("state").takeIf { it.isNotBlank() },
             ).filter { !it.equals(name, ignoreCase = true) }.distinct().joinToString(" · ")
-            out.add(Place(name, detail, GeoPoint(c.getDouble(1), c.getDouble(0))))
+            val isArea = p.optString("osm_key") == "place" || p.optString("osm_key") == "boundary"
+            out.add(Place(name, detail, GeoPoint(c.getDouble(1), c.getDouble(0)), area = isArea))
         }
         return out
     }
