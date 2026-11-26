@@ -52,7 +52,10 @@ object RouteSearch {
         if (route.points.size < 2) return@withContext emptyList()
         val tomtom = async { runCatchingIO { if (Keys.tomtom.isNotBlank()) tomtomAlong(route, fromM, query) else emptyList() } }
         val osm = async { runCatchingIO { osmAlong(route, fromM, query) } }
-        val all = (tomtom.await() + osm.await())
+        val tt = tomtom.await()
+        val os = osm.await()
+        // a TomTom é atualizada; o mapa aberto tem muito lugar que já fechou: só usa ele se a TomTom não achar nada
+        val all = (if (tt.isNotEmpty()) tt else os)
             .filter { it.alongM >= fromM - 300 && it.offM < 1200 }
         // remove o mesmo lugar vindo das duas fontes
         val out = ArrayList<RoutePlace>()

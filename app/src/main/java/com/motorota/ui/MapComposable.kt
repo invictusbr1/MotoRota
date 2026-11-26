@@ -90,6 +90,14 @@ fun MapLibreMapView(
                     vm.following = false
                 }
             }
+            // estabelecimentos atualizados (TomTom) da área que está na tela, só com zoom de perto
+            m.addOnCameraIdleListener {
+                if (m.cameraPosition.zoom < 14.0) return@addOnCameraIdleListener
+                val b = m.projection.visibleRegion.latLngBounds
+                val c = b.center
+                val r = c.distanceTo(LatLng(b.latitudeNorth, b.longitudeEast)).toInt()
+                vm.loadPoisAround(GeoPoint(c.latitude, c.longitude), r)
+            }
             m.addOnMapLongClickListener { p ->
                 currentOnLongPress(GeoPoint(p.latitude, p.longitude))
                 true
@@ -160,6 +168,9 @@ fun MapLibreMapView(
             MapLayers.applyTheme(it, vm.night)
             MapLayers.setSatellite(it, vm.satellite)
         }
+    }
+    LaunchedEffect(style, vm.pois) {
+        style?.let { MapLayers.updatePois(it, vm.pois) }
     }
     LaunchedEffect(style, vm.hazards) {
         style?.let { MapLayers.updateHazards(it, vm.hazards) }

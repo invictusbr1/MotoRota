@@ -47,6 +47,7 @@ object MapLayers {
     private const val SRC_WPS = "mr-wps"
     private const val SRC_RADARS = "mr-radars"
     private const val SRC_HAZARDS = "mr-hazards"
+    private const val SRC_POIS = "mr-pois"
     private const val SRC_SAT = "mr-sat"
     private const val LAYER_SAT = "mr-sat-layer"
     private const val SAT_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg"
@@ -67,7 +68,7 @@ object MapLayers {
 
     private val HIDE = listOf(
         "natural_earth", "landuse_", "landcover_", "park_outline", "aeroway", "rail", "hatching",
-        "road_area_pattern", "path_pedestrian", "one_way_arrow", "building", "airport",
+        "road_area_pattern", "path_pedestrian", "one_way_arrow", "building", "poi", "airport",
         "label_other", "highway-name-path", "waterway_tunnel", "waterway_other", "boundary_disputed",
         "road_shield_us", "highway-shield-us",
     )
@@ -187,6 +188,7 @@ object MapLayers {
         style.addSource(GeoJsonSource(SRC_WPS))
         style.addSource(GeoJsonSource(SRC_RADARS))
         style.addSource(GeoJsonSource(SRC_HAZARDS))
+        style.addSource(GeoJsonSource(SRC_POIS))
 
         val labelAnchor = style.layers.firstOrNull { it is SymbolLayer && !it.id.startsWith("mr-") }?.id
         fun below(layer: Layer) {
@@ -453,6 +455,45 @@ object MapLayers {
             FeatureCollection.fromFeatures(radars.map { r ->
                 Feature.fromGeometry(Point.fromLngLat(r.point.lon, r.point.lat)).apply {
                     addStringProperty("lim", if (r.limitKmh > 0) r.limitKmh.toString() else "")
+                }
+            })
+        )
+    }
+
+    /** Camadas dos estabelecimentos (TomTom): bolinha colorida + nome, só de perto. */
+    private fun addPoiLayers(style: Style) {
+        if (style.getLayer("mr-poi-dot") != null) return
+        style.addLayer(
+            CircleLayer("mr-poi-dot", SRC_POIS).withProperties(
+                PropertyFactory.circleColor(Expression.get("cor")),
+                PropertyFactory.circleRadius(5.5f),
+                PropertyFactory.circleStrokeColor("#FFFFFF"),
+                PropertyFactory.circleStrokeWidth(1.5f),
+            ).apply { minZoom = 14f },
+        )
+        style.addLayer(
+            SymbolLayer("mr-poi-label", SRC_POIS).withProperties(
+                PropertyFactory.textField(Expression.get("nome")),
+                PropertyFactory.textFont(arrayOf("Noto Sans Regular")),
+                PropertyFactory.textSize(11f),
+                PropertyFactory.textColor("#374151"),
+                PropertyFactory.textHaloColor("#FFFFFF"),
+                PropertyFactory.textHaloWidth(1.4f),
+                PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
+                PropertyFactory.textOffset(arrayOf(0f, 0.7f)),
+                PropertyFactory.textOptional(true),
+            ).apply { minZoom = 15f },
+        )
+    }
+
+    fun updatePois(style: Style, pois: List<com.motorota.data.Pois.Poi>) {
+        addPoiLayers(style)
+        val src = style.getSourceAs<GeoJsonSource>(SRC_POIS) ?: return
+        src.setGeoJson(
+            FeatureCollection.fromFeatures(pois.map { p ->
+                Feature.fromGeometry(Point.fromLngLat(p.point.lon, p.point.lat)).apply {
+                    addStringProperty("nome", p.name)
+                    addStringProperty("cor", p.kind.color)
                 }
             })
         )

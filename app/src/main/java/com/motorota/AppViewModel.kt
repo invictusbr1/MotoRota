@@ -1081,6 +1081,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
+    // ---------- Estabelecimentos do mapa (TomTom, atualizados) ----------
+    var pois by mutableStateOf<List<com.motorota.data.Pois.Poi>>(emptyList()); private set
+    private var poiJob: Job? = null
+    private var poiCenter: GeoPoint? = null
+
+    fun loadPoisAround(center: GeoPoint, radiusM: Int) {
+        val last = poiCenter
+        if (last != null && last.distanceTo(center) < 350) return
+        poiJob?.cancel()
+        poiJob = viewModelScope.launch {
+            delay(600) // espera o mapa parar de mexer
+            val list = runCatching { com.motorota.data.Pois.around(center, radiusM) }.getOrDefault(emptyList())
+            if (list.isNotEmpty() || pois.isEmpty()) {
+                pois = list
+                poiCenter = center
+            }
+        }
+    }
+
     // ---------- Acesso aos aplicativos ----------
     val phone by lazy { PhoneActions(getApplication()) }
     /** permissões que o Jarvis precisa pedir agora (a tela mostra o pedido) */
