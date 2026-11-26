@@ -26,6 +26,9 @@ import android.media.AudioAttributes
 import com.motorota.data.Corridor
 import com.motorota.data.Keys
 import com.motorota.data.Http
+import com.motorota.data.BikePhoto
+import com.motorota.data.BikeProfile
+import com.motorota.data.Bikes
 import com.motorota.data.RouteSearch
 import com.motorota.data.SelfInstaller
 import com.motorota.data.Corridors
@@ -231,7 +234,88 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var kmSinceFill by mutableStateOf(prefs.getFloat("km_desde_abastecer", 0f)); private set
     private var fuelWarnLevel = 0
     private var lastFuelSave = 0f
-    val fuelLeftKm: Int? get() = if (tankKm > 0) (tankKm - kmSinceFill).toInt() else null
+    // ---------- Piloto e moto ----------
+    var riderName by mutableStateOf(prefs.getString("nome_piloto", "") ?: ""); private set
+    /** primeira abertura: pede o nome e a moto */
+    var showWelcome by mutableStateOf(!prefs.getBoolean("boas_vindas_ok", false)); private set
+    var bike by mutableStateOf(BikeProfile.fromJson(prefs.getString("moto", null))); private set
+    private var lastBikeSave = 0.0
+
+    /** tem como calcular a autonomia (moto configurada ou autonomia digitada) */
+    val hasFuelTracking: Boolean get() = bike != null || tankKm > 0
+
+    val fuelLeftKm: Int?
+        get() = bike?.leftKm ?: if (tankKm > 0) (tankKm - kmSinceFill).toInt() else null
+
+    private fun saveBike(b: BikeProfile?) {
+        bike = b
+        prefs.edit().putString("moto", b?.toJson()).apply()
+    }
+
+    fun finishWelcome(name: String, modelId: String?) {
+        val n = name.trim()
+        if (n.isNotEmpty()) {
+            riderName = n
+            prefs.edit().putString("nome_piloto", n).apply()
+            // o mesmo nome vale para o intercomunicador
+            viewModelScope.launch { runCatching { intercom.setName(n) } }
+        }
+        if (modelId != null && bike?.modelId != modelId) chooseBike(modelId)
+        showWelcome = false
+        prefs.edit().putBoolean("boas_vindas_ok", true).apply()
+    }
+
+    fun setRiderName(name: String) {
+        riderName = name.trim()
+        prefs.edit().putString("nome_piloto", riderName).apply()
+    }
+
+    fun chooseBike(modelId: String) {
+        val old = bike
+        saveBike(BikeProfile(modelId = modelId, photo = old?.photo, autoAdjust = old?.autoAdjust ?: true))
+        message = "Moto escolhida: ${bike?.name}. Toque em \"Abasteci\" quando encher o tanque."
+    }
+
+    fun setCustomBike(name: String, tankL: Double, kmL: Double) {
+        val old = bike
+        saveBike(BikeProfile(modelId = "outra", customName = name.trim(), customTankL = tankL, customKmL = kmL, photo = old?.photo))
+    }
+
+    fun setBikePhoto(uri: android.net.Uri) {
+        val b = bike ?: return
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) { BikePhoto.save(getApplication(), uri) }
+            if (path != null) saveBike(b.copy(photo = path)) else message = "Não consegui abrir essa foto."
+        }
+    }
+
+    fun toggleBikeAuto() {
+        val b = bike ?: return
+        saveBike(b.copy(autoAdjust = !b.autoAdjust))
+    }
+
+    fun removeBike() = saveBike(null)
+
+    /**
+     * Abasteci. Se informar quantos litros entraram, o app compara com o que ele estimou
+     * e corrige o consumo da SUA moto (fica mais preciso a cada abastecimento).
+     */
+    fun refuelBike(litersIn: Double?) {
+        val b = bike ?: return
+        var nb = b.copy(usedL = 0.0)
+        if (litersIn != null && litersIn > 1 && b.usedL > 2 && b.autoAdjust) {
+            // estimou gastar usedL e entraram litersIn: >1 = a moto rendeu mais do que eu achava
+            val ratio = (b.usedL / litersIn).coerceIn(0.6, 1.5)
+            val weight = if (b.learnedFills == 0) 0.6 else 0.35
+            nb = nb.copy(learned = (b.learned * (1 - weight + weight * ratio)).coerceIn(0.6, 1.5), learnedFills = b.learnedFills + 1)
+        }
+        saveBike(nb)
+        kmSinceFill = 0f
+        lastFuelSave = 0f
+        fuelWarnLevel = 0
+        prefs.edit().putFloat("km_desde_abastecer", 0f).apply()
+        message = "Tanque cheio: cerca de ${nb.fullRangeKm} km de autonomia (±${nb.marginPct}%)."
+    }
 
     fun setTank(km: Int) {
         tankKm = km.coerceIn(0, 2000)
@@ -239,6 +323,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refuel() {
+        if (bike != null) {
+            refuelBike(null); return
+        }
         kmSinceFill = 0f
         lastFuelSave = 0f
         fuelWarnLevel = 0
@@ -246,14 +333,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         message = "Tanque cheio: $tankKm km de autonomia."
     }
 
-    private fun addRiddenKm(km: Double) {
-        if (tankKm <= 0) return
+    private fun addRiddenKm(km: Double, kmh: Double) {
+        val b = bike
+        if (b == null && tankKm <= 0) return
         kmSinceFill += km.toFloat()
+        if (b != null) {
+            // gasto estimado deste trecho, considerando a velocidade (vento e anda-e-para mudam o consumo)
+            val factor = if (b.autoAdjust) Bikes.speedFactor(kmh) else 1.0
+            val used = b.usedL + km / (b.kmL * factor)
+            bike = b.copy(usedL = used)
+            if (used - lastBikeSave > 0.05) {
+                lastBikeSave = used
+                prefs.edit().putString("moto", bike?.toJson()).apply()
+            }
+        }
         if (kmSinceFill - lastFuelSave > 0.5f) {
             lastFuelSave = kmSinceFill
             prefs.edit().putFloat("km_desde_abastecer", kmSinceFill).apply()
         }
-        val left = tankKm - kmSinceFill
+        val left = (fuelLeftKm ?: return).toFloat()
         val level = when {
             left <= 25 -> 2
             left <= 60 -> 1
@@ -410,7 +508,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         gpsLost = false
 
         if (prev != null && dt in 0.3..10.0 && derived in 1.0..90.0 && moved < 900) {
-            addRiddenKm(moved / 1000.0)
+            addRiddenKm(moved / 1000.0, derived * 3.6)
             if (navigating) {
                 tripDistM += moved
                 tripMovingS += dt
@@ -1355,6 +1453,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Mensagens: se perguntarem "chegou mensagem?" ou "de quem é a mensagem?", diga só de quem chegou; leia o conteúdo apenas se o piloto pedir ("lê a da minha mãe").
             - Mensagens marcadas [seguimento] foram captadas pelo microfone sem o piloto dizer "Jarvis", logo depois de você responder. O piloto costuma estar conversando com a garupa ou com outro piloto pelo intercomunicador. Se a frase não for claramente um pedido ou uma continuação da conversa com você, responda exatamente: [IGNORAR] (nada mais). Na dúvida, [IGNORAR].
             - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
+            Piloto: ${riderName.ifBlank { "não informado" }}. Moto: ${bike?.let { b -> "${b.name}, tanque de ${b.tankL} litros, consumo estimado ${"%.1f".format(b.kmL)} km/L (margem ±${b.marginPct}%), autonomia atual cerca de ${b.leftKm} km" } ?: "não configurada"}.
             Situação agora: $quando. Localização: $onde. Velocidade: $speedKmh km/h. Estado: $rota.
             Intercomunicador: ${intercomStatus()}
         """.trimIndent()
@@ -1665,7 +1764,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (navigating && st != null) st.alongM else 0.0,
                 if (navigating && st != null) st.remainingM else (r?.distanceM?.toDouble() ?: 0.0),
                 if (navigating && st != null) st.remainingS else (r?.timeS ?: 0),
-                fuelLeftKm, tankKm, if (navigating) tripElapsedS else 0L,
+                fuelLeftKm, bike?.fullRangeKm ?: tankKm, if (navigating) tripElapsedS else 0L,
             )
         }
         val sb = StringBuilder()

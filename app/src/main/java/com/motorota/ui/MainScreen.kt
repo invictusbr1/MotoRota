@@ -149,7 +149,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
             QuickAction.AVISAR -> vm.myLocation?.let { reportAt = it }
                 ?: run { vm.message = "Sem sinal de GPS para reportar na posição atual." }
             QuickAction.VOZ -> vm.toggleVoice()
-            QuickAction.ABASTECI -> if (vm.tankKm > 0) vm.refuel() else {
+            QuickAction.ABASTECI -> if (vm.hasFuelTracking) vm.refuel() else {
                 vm.message = "Configure primeiro a autonomia do tanque."
                 showSettings = true
             }
@@ -293,6 +293,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
     vm.tripSummary?.let { TripSummaryDialog(it, onDismiss = { vm.tripSummary = null }) }
     if (showSaveTrip) SaveTripDialog(vm, onDismiss = { showSaveTrip = false })
     if (showDownloads) DownloadDialog(vm, onDismiss = { showDownloads = false })
+    if (vm.showWelcome) WelcomeScreen(vm)
 }
 
 /**

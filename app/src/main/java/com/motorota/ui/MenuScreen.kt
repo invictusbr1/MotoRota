@@ -77,7 +77,11 @@ fun MenuScreen(
     BackHandler { if (page != null) page = null else onClose() }
 
     val pages = listOf(
-        MenuPage("moto", "Minha moto", "Autonomia do tanque e abastecimento", Icons.Rounded.TwoWheeler, Color(0xFF60A5FA)),
+        MenuPage(
+            "moto", "Minha moto",
+            vm.bike?.let { "${it.name} · ~${it.leftKm} km de autonomia" } ?: "Escolha sua moto: consumo e autonomia automáticos",
+            Icons.Rounded.TwoWheeler, Color(0xFF60A5FA),
+        ),
         MenuPage("jarvis", "Jarvis", "Escuta, voz, chaves e teste de conexão", Icons.Rounded.Mic, Color(0xFF22D3EE)),
         MenuPage("apps", "Aplicativos e mensagens", "WhatsApp, ligações, música e permissões", Icons.Rounded.Apps, Color(0xFFA78BFA)),
         MenuPage("intercom", "Intercomunicador", "Seu nome, seu código e amigos", Icons.Rounded.Headset, NavGreen),
@@ -143,12 +147,11 @@ fun MenuScreen(
                     }
 
                     "moto" -> {
-                        SettingsCards(vm, withMic, "moto")
-                        InfoCard(
-                            "Em breve: sua moto",
-                            "Você vai poder escolher o modelo (ex.: Triumph Tiger 900) e o app já traz consumo médio, " +
-                                "tamanho do tanque e dicas para o Jarvis planejar abastecimento e paradas.",
-                        )
+                        GarageSection(vm)
+                        if (vm.bike == null) {
+                            Text("Ou informe a autonomia na mão:", color = TextDim, fontSize = 13.sp)
+                            SettingsCards(vm, withMic, "moto")
+                        }
                     }
                     "jarvis" -> SettingsCards(vm, withMic, "jarvis")
                     "apps" -> SettingsCards(vm, withMic, "apps")
