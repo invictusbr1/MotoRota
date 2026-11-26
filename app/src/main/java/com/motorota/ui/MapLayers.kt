@@ -67,7 +67,7 @@ object MapLayers {
 
     private val HIDE = listOf(
         "natural_earth", "landuse_", "landcover_", "park_outline", "aeroway", "rail", "hatching",
-        "road_area_pattern", "path_pedestrian", "one_way_arrow", "building", "poi_", "airport",
+        "road_area_pattern", "path_pedestrian", "one_way_arrow", "building", "airport",
         "label_other", "highway-name-path", "waterway_tunnel", "waterway_other", "boundary_disputed",
         "road_shield_us", "highway-shield-us",
     )
@@ -131,7 +131,16 @@ object MapLayers {
                     }
                     layer.setProperties(PropertyFactory.lineColor(c))
                 }
-                is SymbolLayer -> if (!id.contains("shield")) layer.setProperties(
+                is SymbolLayer -> if (id.startsWith("poi")) {
+                    // estabelecimentos (posto, restaurante, farmácia...): aparecem de perto, sem poluir
+                    layer.setProperties(
+                        PropertyFactory.textColor(if (night) "#C9D3E0" else "#3D4650"),
+                        PropertyFactory.textHaloColor(t.halo),
+                        PropertyFactory.textHaloWidth(1.4f),
+                        PropertyFactory.textSize(11.5f),
+                    )
+                    layer.minZoom = 14.5f
+                } else if (!id.contains("shield")) layer.setProperties(
                     PropertyFactory.textColor(t.text),
                     PropertyFactory.textHaloColor(t.halo),
                     PropertyFactory.textHaloWidth(1.6f),

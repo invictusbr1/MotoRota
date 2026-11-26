@@ -26,6 +26,7 @@ import android.media.AudioAttributes
 import com.motorota.data.Corridor
 import com.motorota.data.Keys
 import com.motorota.data.Http
+import com.motorota.data.RouteSearch
 import com.motorota.data.SelfInstaller
 import com.motorota.data.Corridors
 import com.motorota.data.Geocoder
@@ -1320,6 +1321,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
             - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador.
+            - Paradas no caminho ("quero parar num posto no meio do caminho"): use adicionar_parada com lugar e onde. Nunca escolha lugar que obrigue a voltar ou desviar muito; diga em que km fica.
             - Mensagens: se perguntarem "chegou mensagem?" ou "de quem é a mensagem?", diga só de quem chegou; leia o conteúdo apenas se o piloto pedir ("lê a da minha mãe").
             - Mensagens marcadas [seguimento] foram captadas pelo microfone sem o piloto dizer "Jarvis", logo depois de você responder. O piloto costuma estar conversando com a garupa ou com outro piloto pelo intercomunicador. Se a frase não for claramente um pedido ou uma continuação da conversa com você, responda exatamente: [IGNORAR] (nada mais). Na dúvida, [IGNORAR].
             - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
@@ -1432,10 +1434,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         ) { a -> jarvisNavigate(a.optString("destino")) },
         Tool(
             "adicionar_parada",
-            "Adiciona uma parada no caminho da rota atual (posto, restaurante, endereço...). Recalcula a rota.",
-            mapOf("lugar" to ("STRING" to "lugar da parada")),
+            "Adiciona uma parada NO CAMINHO da rota atual. Para tipos de lugar (posto, restaurante, farmácia...) " +
+                "procura ao longo da rota, sem desvio grande. Recalcula a rota.",
+            mapOf(
+                "lugar" to ("STRING" to "o que procurar (ex.: posto, restaurante) ou um lugar específico"),
+                "onde" to ("STRING" to "em que parte do caminho: proximo, meio do caminho, perto do destino, ou 'km 40'"),
+            ),
             listOf("lugar"),
-        ) { a -> jarvisAddStop(a.optString("lugar")) },
+        ) { a -> jarvisAddStop(a.optString("lugar"), a.optString("onde").takeIf { it.isNotBlank() }) },
+        Tool(
+            "buscar_na_rota",
+            "Lista postos, restaurantes, farmácias etc. que ficam no caminho da rota (à frente), com em que km estão e quanto saem da rota.",
+            mapOf("o_que" to ("STRING" to "tipo de lugar: posto, restaurante, farmácia, padaria, borracharia, hotel...")),
+            listOf("o_que"),
+        ) { a -> jarvisSearchAlong(a.optString("o_que")) },
         Tool(
             "radares_a_frente",
             "Conta os radares de velocidade no caminho da rota traçada (navegando: daqui até o destino) e diz a distância e o limite de cada um. Sem rota, conta os que estão em volta.",
@@ -1516,10 +1528,50 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return "Destino ${p.name} definido; a rota ainda está sendo calculada."
     }
 
-    private suspend fun jarvisAddStop(place: String): String {
+    /** Rota atual e onde a moto está nela (metros desde o início). */
+    private suspend fun routeNow(): Pair<RouteResult, Double>? = withContext(Dispatchers.Main) {
+        val r = currentRoute ?: navigator?.route ?: return@withContext null
+        r to (if (navigating) navState?.alongM ?: 0.0 else 0.0)
+    }
+
+    private suspend fun jarvisSearchAlong(what: String): String {
+        val (r, from) = routeNow() ?: return "Não tem rota traçada. Me diga para onde vamos primeiro."
+        val list = RouteSearch.alongRoute(r, from, what)
+        Http.report("busca-rota", "\"$what\" na rota de ${formatDistance(r.distanceM.toDouble())}: achou ${list.size}")
+        if (list.isEmpty()) return "Não achei $what no caminho."
+        return "${list.size} no caminho: " + list.take(6).joinToString("; ") {
+            "${it.place.name} a ${formatDistance(it.alongM - from)} daqui" +
+                (if (it.offM > 150) ", sai ${formatDistance(it.offM)} da rota" else ", na beira da rota") +
+                (if (it.place.detail.isNotBlank()) " (${it.place.detail})" else "")
+        } + "."
+    }
+
+    private suspend fun jarvisAddStop(place: String, where: String? = null): String {
         if (place.isBlank()) return "Faltou dizer o lugar da parada."
         val hasDest = withContext(Dispatchers.Main) { destination != null }
         if (!hasDest) return jarvisNavigate(place)
+        // tipo de lugar (posto, restaurante...): procura AO LONGO da rota, não perto de onde estou
+        val rn = routeNow()
+        if (rn != null && (RouteSearch.isCategory(place) || where != null)) {
+            val (r, from) = rn
+            val found = RouteSearch.alongRoute(r, from, place)
+            val best = RouteSearch.pick(found, from, r.cumDist.last(), where)
+            Http.report(
+                "busca-rota",
+                "parada \"$place\" onde=${where ?: "-"}: ${found.size} achados; escolheu ${best?.place?.name} km ${best?.let { (it.alongM - from) / 1000 }}",
+            )
+            if (best != null) {
+                withContext(Dispatchers.Main) {
+                    if (navigating) pendingStart = true
+                    addStop(Waypoint(best.place.point, best.place.name))
+                }
+                return "Parada em ${best.place.name}, a ${formatDistance(best.alongM - from)} daqui no caminho" +
+                    (if (best.offM > 150) ", saindo uns ${formatDistance(best.offM)} da rota" else ", na beira da estrada") +
+                    (if (best.place.detail.isNotBlank()) " (${best.place.detail})" else "") +
+                    ". Rota recalculada." + if (found.size > 1) " Tem mais ${found.size - 1} opções no caminho, se preferir outra." else ""
+            }
+            if (RouteSearch.isCategory(place)) return "Não achei $place no caminho da rota."
+        }
         val here = withContext(Dispatchers.Main) { myLocation }
         val p = Geocoder.search(place, here).firstOrNull() ?: return "Não encontrei \"$place\"."
         withContext(Dispatchers.Main) {
@@ -1599,14 +1651,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val stopKm = (snap.fuel - margin).coerceAtLeast(5)
                 val atM = snap.from + stopKm * 1000.0
                 sb.append("Precisa abastecer no caminho: o ideal é por volta de $stopKm km daqui, antes de entrar na reserva. ")
-                val where = pointAt(snap.r, atM)
-                val postos = runCatching { Geocoder.search("posto de gasolina", where) }.getOrDefault(emptyList())
-                    .filter { it.point.distanceTo(where) < 15_000 }.take(3)
+                // postos NO CAMINHO, antes do ponto limite (ninguém quer voltar ou desviar muito)
+                val postos = runCatching { RouteSearch.alongRoute(snap.r, snap.from, "posto de gasolina") }
+                    .getOrDefault(emptyList())
+                    .filter { it.alongM <= atM + 3000 }
+                    .sortedByDescending { it.alongM }
+                    .take(3)
                 if (postos.isNotEmpty()) {
-                    sb.append("Postos perto desse ponto: " + postos.joinToString("; ") {
-                        "${it.name} (a ${formatDistance(it.point.distanceTo(where))} do ponto ideal)"
+                    sb.append("Postos no caminho antes desse ponto: " + postos.joinToString("; ") {
+                        "${it.place.name} a ${formatDistance(it.alongM - snap.from)} daqui" +
+                            if (it.offM > 150) " (sai ${formatDistance(it.offM)} da rota)" else ""
                     } + ". ")
-                } else sb.append("Não achei posto cadastrado perto desse ponto; abasteça no primeiro que aparecer antes dele. ")
+                } else sb.append("Não achei posto cadastrado no caminho antes desse ponto; abasteça no primeiro que aparecer. ")
             } else if (snap.r != null) {
                 sb.append("Dá para chegar sem abastecer, sobrando uns ${(snap.fuel - remKm).toInt()} km. ")
             }
