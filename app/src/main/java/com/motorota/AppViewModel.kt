@@ -1274,6 +1274,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** ler em voz alta as mensagens que chegam (WhatsApp/Telegram/SMS) */
     // desligado por padrão: o Jarvis só fala das mensagens quando o piloto pergunta
     var readMessagesAloud by mutableStateOf(prefs.getBoolean("avisar_mensagens", false)); private set
+
+    /** Facilidade de acordar o Jarvis: 0 alta, 1 normal, 2 baixa */
+    var wakeSensitivity by mutableStateOf(prefs.getInt("sens_jarvis", 1).also { com.motorota.assistant.WakeWord.sensitivity = it }); private set
+    fun setWakeSens(v: Int) {
+        wakeSensitivity = v.coerceIn(0, 2)
+        com.motorota.assistant.WakeWord.sensitivity = wakeSensitivity
+        prefs.edit().putInt("sens_jarvis", wakeSensitivity).apply()
+    }
     fun toggleReadMessages() {
         readMessagesAloud = !readMessagesAloud
         prefs.edit().putBoolean("avisar_mensagens", readMessagesAloud).apply()
@@ -1540,7 +1548,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Ao confirmar uma rota, diga o bairro/cidade e a distância do destino escolhido (vêm no resultado da função), para o piloto perceber se for o lugar errado. Se ele disser que está errado, chame navegar_para de novo com o nome mais completo (ex.: "Xerém, Duque de Caxias").
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
-            - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador. "Manda mensagem/recado/avisa pro X" = mandar_recado se X for amigo ou grupo do intercomunicador (o Jarvis dele fala em voz alta); se não for, enviar_whatsapp. Se o piloto chamar alguém pelo parentesco ("meu pai"), use o amigo que ele já identificou na conversa ou pergunte qual é.
+            - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "Liga pro X" / "deixa eu ligar pro X" = função ligar: se ele não disse por onde (chip, WhatsApp ou MotoRota), SEMPRE pergunte antes. "Chama X no rádio/intercomunicador/MotoRota" = chamar_piloto. "Manda mensagem/recado/avisa pro X" = mandar_recado se X for amigo ou grupo do intercomunicador (o Jarvis dele fala em voz alta); se não for, enviar_whatsapp. Se o piloto chamar alguém pelo parentesco ("meu pai"), use o amigo que ele já identificou na conversa ou pergunte qual é.
             - Paradas no caminho ("quero parar num posto no meio do caminho"): use adicionar_parada com lugar e onde. Nunca escolha lugar que obrigue a voltar ou desviar muito; diga em que km fica.
             - Mensagens: se perguntarem "chegou mensagem?" ou "de quem é a mensagem?", diga só de quem chegou; leia o conteúdo apenas se o piloto pedir ("lê a da minha mãe").
             - Mensagens marcadas [seguimento] foram captadas pelo microfone sem o piloto dizer "Jarvis", logo depois de você responder. O piloto costuma estar conversando com a garupa ou com outro piloto pelo intercomunicador. Se a frase não for claramente um pedido ou uma continuação da conversa com você, responda exatamente: [IGNORAR] (nada mais). Na dúvida, [IGNORAR].
@@ -1576,11 +1584,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             listOf("nome"),
         ) { a -> phoneAction { phone.openApp(a.optString("nome")) } },
         Tool(
-            "ligar_para_contato",
-            "Faz uma ligação telefônica normal para um contato da agenda do celular.",
-            mapOf("contato" to ("STRING" to "nome do contato, como o piloto falou")),
+            "ligar",
+            "Liga para alguém. Pode ser pelo chip (ligação normal), pelo WhatsApp (chamada de voz) ou pelo MotoRota " +
+                "(intercomunicador, só amigos do app). Se o piloto NÃO disse por onde, chame com meio vazio: a função diz " +
+                "as opções e você PERGUNTA ao piloto por onde ligar. Depois chame de novo com o meio escolhido. " +
+                "Depois de ligar, o mapa volta para a tela sozinho.",
+            mapOf(
+                "contato" to ("STRING" to "nome da pessoa, como o piloto falou (ex.: meu pai, Renato)"),
+                "meio" to ("STRING" to "chip, whatsapp ou motorota; vazio se o piloto não disse"),
+            ),
             listOf("contato"),
-        ) { a -> phoneAction { phone.call(a.optString("contato")) } },
+        ) { a -> jarvisCall(a.optString("contato"), a.optString("meio")) },
+        Tool("desligar_ligacao", "Desliga a ligação em andamento (chip ou intercomunicador do MotoRota).") { _ ->
+            withContext(Dispatchers.Main) {
+                when {
+                    intercom.busy -> { intercom.hangUp(); "Chamada do MotoRota encerrada." }
+                    else -> phoneAction { phone.endCall() }
+                }
+            }
+        },
         Tool(
             "enviar_whatsapp",
             "Manda uma mensagem de WhatsApp para um contato da agenda. Escreva a mensagem do jeito que o piloto pediu, em primeira pessoa.",
@@ -1751,6 +1773,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
     )
+
+    private suspend fun jarvisCall(who: String, via: String): String = withContext(Dispatchers.Main) {
+        if (who.isBlank()) return@withContext "Para quem ligar?"
+        val friend = intercom.findFriend(who.removePrefix("meu ").removePrefix("minha "))
+        val contact = try { phone.findContact(who) } catch (e: PhoneActions.NeedPermission) {
+            if (friend == null) return@withContext phoneAction { throw e } else null
+        }
+        val v = norm(via)
+        when {
+            v.contains("motorota") || v.contains("intercom") || v.contains("app") || v.contains("radio") -> {
+                if (friend == null) "Não achei \"$who\" nos amigos do MotoRota. Amigos: ${intercom.friends.joinToString(", ") { it.name }.ifBlank { "nenhum" }}."
+                else intercom.call(friend)
+            }
+            v.contains("whats") || v.contains("zap") -> phoneAction { phone.whatsappCall(who) }
+            v.contains("chip") || v.contains("normal") || v.contains("telefone") || v.contains("operadora") -> phoneAction { phone.call(who) }
+            else -> {
+                val opts = buildList {
+                    if (contact != null) { add("pelo chip"); add("pelo WhatsApp") }
+                    if (friend != null) add("pelo MotoRota")
+                }
+                if (opts.isEmpty()) "Não achei \"$who\" nos contatos do celular nem nos amigos do MotoRota."
+                else "PERGUNTE ao piloto, curto: \"Ligo para ${contact?.name ?: friend!!.name} ${opts.joinToString(", ").replace(Regex(", ([^,]*)$"), " ou $1")}?\" " +
+                    "Quando ele responder, chame ligar de novo com o meio."
+            }
+        }
+    }
+
+    private fun norm(s: String) = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "").trim()
 
     private suspend fun jarvisNavigate(dest: String): String {
         if (dest.isBlank()) return "Faltou dizer o destino."

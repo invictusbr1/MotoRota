@@ -90,6 +90,7 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
         val m = model ?: return false
         return try {
             fired = false
+            partialHits = 0
             val rec = Recognizer(m, 16000f, GRAMMAR).apply { setWords(true) }
             val s = SpeechService(rec, 16000f)
             s.startListening(listener)
@@ -116,9 +117,19 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
     inner class Feeder internal constructor(private val rec: Recognizer) {
         private var lastHit = 0L
 
+        private var hits = 0
+
         fun feed(buf: ShortArray, n: Int) {
-            if (!rec.acceptWaveForm(buf, n)) return
-            if (!confident(rec.result)) return
+            val final = rec.acceptWaveForm(buf, n)
+            val ok = if (final) confident(rec.result) else {
+                val need = when (sensitivity) { 0 -> 1; 1 -> 2; else -> Int.MAX_VALUE }
+                val t = runCatching { JSONObject(rec.partialResult).optString("partial") }.getOrNull().orEmpty()
+                val w = t.split(' ').filter { it.isNotBlank() && it != "[unk]" }
+                hits = if (w.size in 1..2 && w.last() == "jarvis") hits + 1 else 0
+                hits >= need
+            }
+            if (!ok) return
+            hits = 0
             rec.reset()
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - lastHit < 4000) return
@@ -161,11 +172,22 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
             val conf = w.optDouble("conf", 0.0)
             val dur = w.optDouble("end", 0.0) - w.optDouble("start", 0.0)
             Log.d("MotoRota", "Jarvis: ouviu jarvis conf=$conf dur=$dur (${o.optString("text")})")
-            if (conf >= MIN_CONF && dur in 0.28..1.4) hit = true
+            // "jarvis" tem que estar no começo da frase (até a 2ª palavra): no meio de conversa não vale
+            if (conf >= minConf() && dur in 0.2..1.6 && i <= 1) hit = true
         }
-        // frase longa com "jarvis" no meio de muita palavra = conversa, não chamado
-        val total = o.optString("text").split(' ').count { it.isNotBlank() }
-        return hit && total <= 4
+        return hit
+    }
+
+    private var partialHits = 0
+
+    /** Resultado parcial (enquanto ainda fala): dispara rápido se ouvir só "jarvis" de forma estável. */
+    private fun partialHit(json: String?): Boolean {
+        val need = when (sensitivity) { 0 -> 1; 1 -> 2; else -> return false }
+        val t = runCatching { JSONObject(json ?: return false).optString("partial") }.getOrNull().orEmpty()
+        val w = t.split(' ').filter { it.isNotBlank() && it != "[unk]" }
+        val only = w.isNotEmpty() && w.last() == "jarvis" && w.size <= 2 && (w.size == 1 || w[0] in setOf("hey", "hi", "ok", "okay"))
+        partialHits = if (only) partialHits + 1 else 0
+        return partialHits >= need
     }
 
     private fun fire() {
@@ -176,7 +198,9 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
     }
 
     private val listener = object : RecognitionListener {
-        override fun onPartialResult(hypothesis: String?) {}
+        override fun onPartialResult(hypothesis: String?) {
+            if (partialHit(hypothesis)) fire()
+        }
 
         override fun onResult(hypothesis: String?) {
             if (confident(hypothesis)) fire()
@@ -200,7 +224,10 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
         private const val MODEL_NAME = "vosk-model-small-en-us-0.15"
         private const val MODEL_URL = "https://alphacephei.com/vosk/models/$MODEL_NAME.zip"
 
-        private const val MIN_CONF = 0.93
+        /** 0 = alta (acorda fácil), 1 = normal, 2 = baixa (só com certeza) */
+        @Volatile var sensitivity = 1
+
+        private fun minConf() = when (sensitivity) { 0 -> 0.6; 1 -> 0.78; else -> 0.9 }
 
         /**
          * "jarvis" + palavras "isca" de som parecido: com só uma palavra na gramática, o reconhecedor
@@ -209,8 +236,9 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
         private val GRAMMAR = org.json.JSONArray(
             listOf(
                 "jarvis", "hey jarvis", "hi jarvis", "ok jarvis",
-                "service", "nervous", "harvest", "travis", "jars", "jar", "this", "is", "was", "yes", "us",
-                "jazz", "chavis", "davis", "mavis", "garbage", "darkness", "office", "starve", "service is",
+                // iscas de som DIFERENTE o bastante de "jarvis" falado com sotaque brasileiro
+                // (as muito parecidas, tipo "jars"/"travis", roubavam o chamado de verdade)
+                "nervous", "this", "is", "was", "yes", "us", "garbage", "darkness", "office",
                 "yeah", "no", "hey", "hi", "okay", "the", "a", "and", "so", "you", "what", "very", "she", "says",
                 "[unk]",
             ),

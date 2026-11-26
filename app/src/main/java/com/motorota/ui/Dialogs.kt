@@ -733,6 +733,28 @@ fun SettingsCards(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, se
                     Spacer(Modifier.width(8.dp))
                     Text("Assistente Jarvis", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
+                Text("Facilidade para acordar com \"Jarvis\"", color = Color.White, fontSize = 14.5.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Alta", "Normal", "Baixa").forEachIndexed { i, l ->
+                        val sel = vm.wakeSensitivity == i
+                        Surface(
+                            color = if (sel) Color(0xFF22D3EE).copy(alpha = 0.25f) else Color(0xFF2D3744),
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier.weight(1f).clickable { vm.setWakeSens(i) },
+                        ) {
+                            Text(
+                                l, color = Color.White, fontSize = 13.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Alta: acorda na primeira chamada, mesmo com vento (pode acordar à toa às vezes). " +
+                        "Baixa: só com certeza total. Normal é o meio-termo.",
+                    color = TextDim,
+                    fontSize = 12.sp,
+                )
                 Text(
                     "Diga \"Jarvis\" (ou toque no microfone) e peça: \"programa a rota pra Xerém\", " +
                         "\"quantos radares tem pra frente?\", \"quanto falta?\", \"posto mais perto\"... " +

@@ -103,11 +103,52 @@ class PhoneActions(private val ctx: Context) {
             throw NeedPermission(listOf(Manifest.permission.CALL_PHONE), "Preciso da permissão de fazer ligações. Aceite na tela e me peça de novo.")
         }
         val ok = start(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(c.number))))
-        if (ok) returnToApp(3500) // a ligação continua; a tela volta para o mapa
+        if (ok) returnToApp(3000) // a ligação continua; a tela volta para o mapa
         return if (ok) "Ligando para ${c.name}." else "Não consegui ligar para ${c.name}."
     }
 
     /** Abre a conversa do WhatsApp com a mensagem já escrita (o envio é um toque, ou automático com a Acessibilidade). */
+    /** Chamada de voz do WhatsApp direto (sem abrir conversa), e volta para o mapa. */
+    fun whatsappCall(spoken: String): String {
+        val c = findContact(spoken) ?: return "Não achei \"$spoken\" nos seus contatos."
+        val mime = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
+        val digits = c.number.filter { it.isDigit() }.takeLast(8)
+        var rowId: Long? = null
+        ctx.contentResolver.query(
+            android.provider.ContactsContract.Data.CONTENT_URI,
+            arrayOf(android.provider.ContactsContract.Data._ID, android.provider.ContactsContract.Data.DATA1, android.provider.ContactsContract.Data.DISPLAY_NAME),
+            "${android.provider.ContactsContract.Data.MIMETYPE} = ?", arrayOf(mime), null,
+        )?.use { cur ->
+            while (cur.moveToNext()) {
+                val data = cur.getString(1).orEmpty().filter { it.isDigit() }
+                val name = cur.getString(2).orEmpty()
+                if ((digits.isNotEmpty() && data.endsWith(digits)) || norm(name) == norm(c.name)) {
+                    rowId = cur.getLong(0)
+                    break
+                }
+            }
+        }
+        val id = rowId ?: return "${c.name} não aparece com WhatsApp neste celular. Quer que eu ligue pelo chip?"
+        val i = Intent(Intent.ACTION_VIEW).setDataAndType(
+            Uri.withAppendedPath(android.provider.ContactsContract.Data.CONTENT_URI, id.toString()), mime,
+        ).setPackage("com.whatsapp")
+        if (!start(i)) return "Não consegui abrir a chamada do WhatsApp."
+        returnToApp(4500)
+        return "Ligando para ${c.name} pelo WhatsApp."
+    }
+
+    /** Desliga a ligação normal (chip) em andamento. */
+    fun endCall(): String {
+        if (android.os.Build.VERSION.SDK_INT < 28) return "Neste Android não consigo desligar sozinho; desligue pelo botão do fone."
+        if (!has(Manifest.permission.ANSWER_PHONE_CALLS)) {
+            throw NeedPermission(listOf(Manifest.permission.ANSWER_PHONE_CALLS), "Preciso da permissão de controlar ligações. Aceite na tela e me peça de novo.")
+        }
+        val tm = ctx.getSystemService(Context.TELECOM_SERVICE) as android.telecom.TelecomManager
+        @Suppress("DEPRECATION")
+        val ok = runCatching { tm.endCall() }.getOrDefault(false)
+        return if (ok) "Ligação encerrada." else "Não tem ligação pelo chip agora (no WhatsApp, desligue pela tela dele)."
+    }
+
     fun whatsapp(spoken: String, message: String): String {
         val c = findContact(spoken) ?: return "Não achei \"$spoken\" nos seus contatos."
         var digits = c.number.filter { it.isDigit() }
