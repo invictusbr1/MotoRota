@@ -179,7 +179,6 @@ class Jarvis(
                 // Conversa contínua: depois de cada resposta ele continua ouvindo, sem precisar
                 // chamar "Jarvis" de novo. Se o piloto ficar quieto, ele sai sozinho.
                 var rounds = 0
-                var retried = false
                 while (rounds < 12) {
                     rounds++
                     status = JarvisStatus.LISTENING
@@ -196,15 +195,9 @@ class Jarvis(
                     } finally {
                         afterListen()
                     }
-                    if (text.isBlank()) {
-                        // na primeira vez pede para repetir; depois, silêncio = fim da conversa
-                        if (rounds == 1 && fromWake && !retried) {
-                            retried = true
-                            rounds = 0
-                            status = JarvisStatus.SPEAKING
-                            speak("Não ouvi. Pode repetir?")
-                            continue
-                        }
+                    if (text.isBlank() || isNoise(text)) {
+                        // silêncio ou só um "hum": provavelmente não era com ele. Sai quieto, sem perguntar nada.
+                        heard = ""
                         endTone()
                         break
                     }
@@ -222,7 +215,12 @@ class Jarvis(
                         val prompt = systemPrompt()
                         // na continuação (sem dizer "Jarvis") a IA decide se a frase era mesmo para ele
                         // ou se o piloto estava conversando com a garupa / outra pessoa
-                        val asked = if (rounds > 1) "[seguimento] $text" else text
+                        // pelo "Jarvis" falado: [chamado] (o detector pode ter se enganado); botão na tela: direto
+                        val asked = when {
+                            rounds > 1 -> "[seguimento] $text"
+                            fromWake -> "[chamado] $text"
+                            else -> text
+                        }
                         val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { think(prompt, asked) }
                         kotlinx.coroutines.withTimeoutOrNull(55_000) { job.await() } ?: run {
                             job.cancel()
@@ -332,6 +330,14 @@ class Jarvis(
     private fun clean(s: String) = s.replace(Regex("[*#_`]"), "").replace(Regex("\\s+"), " ").trim()
 
     /** bip de "pode falar" (mais curto e baixo quando é continuação da conversa) */
+    /** "é", "hum", "ah", "ok"... nada que seja pedido. */
+    private fun isNoise(t: String): Boolean {
+        val w = t.lowercase().replace(Regex("[^a-zà-ú ]"), " ").split(' ').filter { it.isNotBlank() }
+        if (w.isEmpty()) return true
+        val fill = setOf("é", "e", "eh", "hum", "hm", "ah", "aham", "uhum", "oi", "ok", "tá", "ta", "o", "a", "né", "então", "jarvis")
+        return w.all { it in fill } && w.size <= 3
+    }
+
     private fun beep(followUp: Boolean = false) {
         runCatching {
             val tg = ToneGenerator(AudioManager.STREAM_MUSIC, if (followUp) 45 else 70)
