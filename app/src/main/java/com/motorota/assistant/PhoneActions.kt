@@ -36,6 +36,17 @@ class PhoneActions(private val ctx: Context) {
         false
     }
 
+    /**
+     * Traz o MotoRota de volta para a frente depois de uma ação que abriu outro app
+     * (o piloto não precisa tocar no celular). Funciona porque o app tem o acesso a notificações
+     * / acessibilidade ligado, que o Android deixa abrir a tela mesmo em segundo plano.
+     */
+    fun returnToApp(delayMs: Long) {
+        val home = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: return
+        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ runCatching { ctx.startActivity(home) } }, delayMs)
+    }
+
     // ---------- Aplicativos ----------
 
     data class AppInfo(val label: String, val pkg: String)
@@ -92,6 +103,7 @@ class PhoneActions(private val ctx: Context) {
             throw NeedPermission(listOf(Manifest.permission.CALL_PHONE), "Preciso da permissão de fazer ligações. Aceite na tela e me peça de novo.")
         }
         val ok = start(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(c.number))))
+        if (ok) returnToApp(3500) // a ligação continua; a tela volta para o mapa
         return if (ok) "Ligando para ${c.name}." else "Não consegui ligar para ${c.name}."
     }
 
@@ -127,27 +139,72 @@ class PhoneActions(private val ctx: Context) {
         am.dispatchMediaKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, code, 0))
     }
 
-    fun music(action: String, query: String?): String {
-        val a = norm(action)
-        return when {
-            !query.isNullOrBlank() -> playSearch(query)
-            a.contains("pausa") || a.contains("para") -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE); "Música pausada." }
-            a.contains("proxim") || a.contains("pula") || a.contains("avanca") -> { mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT); "Próxima." }
-            a.contains("anterior") || a.contains("volta") -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS); "Anterior." }
-            else -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY); "Tocando." }
+    /** Players de música ativos (Spotify primeiro). Precisa do acesso a notificações. */
+    private fun players(): List<android.media.session.MediaController> {
+        if (!notificationsAllowed()) return emptyList()
+        return try {
+            val msm = ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as android.media.session.MediaSessionManager
+            msm.getActiveSessions(ComponentName(ctx, MessageListener::class.java))
+                .filter { it.packageName != ctx.packageName }
+                .sortedByDescending { it.packageName == SPOTIFY }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
+    private fun canSearch(c: android.media.session.MediaController) =
+        ((c.playbackState?.actions ?: 0L) and android.media.session.PlaybackState.ACTION_PLAY_FROM_SEARCH) != 0L
+
+    fun music(action: String, query: String?): String {
+        val a = norm(action)
+        if (!query.isNullOrBlank()) return playSearch(query)
+        val p = players().firstOrNull()?.transportControls
+        return when {
+            a.contains("pausa") || a.contains("para") -> { p?.pause() ?: mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE); "Música pausada." }
+            a.contains("proxim") || a.contains("pula") || a.contains("avanca") -> { p?.skipToNext() ?: mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT); "Próxima." }
+            a.contains("anterior") || a.contains("volta") -> { p?.skipToPrevious() ?: mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS); "Anterior." }
+            else -> { p?.play() ?: mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY); "Tocando." }
+        }
+    }
+
+    /**
+     * Toca pelo nome SEM abrir o app: manda o pedido direto para o player que já está aberto
+     * em segundo plano. Se o Spotify estiver fechado, abre, dá o play e volta para o MotoRota sozinho.
+     */
     private fun playSearch(q: String): String {
+        players().firstOrNull { canSearch(it) }?.let { c ->
+            c.transportControls.playFromSearch(q, android.os.Bundle())
+            return "Tocando $q."
+        }
         val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
             .putExtra(SearchManager.QUERY, q)
             .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
-        if (isInstalled("com.spotify.music")) i.setPackage("com.spotify.music")
-        return if (start(i)) "Tocando $q." else "Não achei um app de música que aceite pedido por voz."
+        if (isInstalled(SPOTIFY)) i.setPackage(SPOTIFY)
+        if (!start(i)) return "Não achei um app de música que aceite pedido por voz."
+        // dá tempo do Spotify abrir e começar; se ele abriu sem tocar, manda o play pela sessão
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            runCatching {
+                val c = players().firstOrNull { it.packageName == SPOTIFY } ?: players().firstOrNull()
+                if (c != null && c.playbackState?.state != android.media.session.PlaybackState.STATE_PLAYING) {
+                    if (canSearch(c)) c.transportControls.playFromSearch(q, android.os.Bundle()) else c.transportControls.play()
+                }
+            }
+        }, 3500)
+        returnToApp(4500)
+        return "Tocando $q."
     }
 
-    fun volume(action: String): String {
+    fun volume(action: String, percent: Int? = null): String {
         val a = norm(action)
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (percent != null && percent in 0..100) {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(percent / 100f * max), 0)
+            return "Volume em $percent por cento."
+        }
+        if (a.contains("mud") || a.contains("silenc") || a.contains("zer")) {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            return "Som da música zerado."
+        }
         val dir = when {
             a.contains("aument") || a.contains("sobe") || a.contains("mais") -> AudioManager.ADJUST_RAISE
             a.contains("diminu") || a.contains("abaix") || a.contains("menos") -> AudioManager.ADJUST_LOWER
@@ -160,6 +217,10 @@ class PhoneActions(private val ctx: Context) {
         repeat(2) { am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, 0) }
         val v = am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         return "Volume em $v por cento."
+    }
+
+    companion object {
+        private const val SPOTIFY = "com.spotify.music"
     }
 
     // ---------- Mensagens que chegam ----------

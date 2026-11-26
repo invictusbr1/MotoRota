@@ -1508,7 +1508,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun jarvisTools(): List<Tool> = listOf(
         Tool(
             "abrir_aplicativo",
-            "Abre qualquer aplicativo instalado no celular pelo nome (ex.: Spotify, YouTube, Waze, Calculadora, Banco).",
+            "Abre (traz para a tela) um aplicativo instalado pelo nome. Use SÓ quando o piloto pedir para ABRIR um app; " +
+                "para música use a função musica, que toca em segundo plano sem tirar o mapa da tela.",
             mapOf("nome" to ("STRING" to "nome do aplicativo")),
             listOf("nome"),
         ) { a -> phoneAction { phone.openApp(a.optString("nome")) } },
@@ -1542,7 +1543,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         },
         Tool(
             "musica",
-            "Controla a música do celular (Spotify ou outro): tocar, pausar, próxima, anterior; ou tocar uma música/artista/playlist pelo nome.",
+            "Controla a música em segundo plano, sem abrir o app (Spotify ou outro): tocar, pausar, próxima, anterior; " +
+                "ou tocar uma música/artista/playlist pelo nome.",
             mapOf(
                 "acao" to ("STRING" to "tocar, pausar, proxima ou anterior"),
                 "busca" to ("STRING" to "música, artista ou playlist para tocar (opcional)"),
@@ -1551,10 +1553,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         ) { a -> phoneAction { phone.music(a.optString("acao"), a.optString("busca").takeIf { it.isNotBlank() }) } },
         Tool(
             "volume",
-            "Aumenta, diminui ou põe no máximo o volume da música.",
-            mapOf("acao" to ("STRING" to "aumentar, diminuir ou maximo")),
+            "Muda o volume da música/voz: aumentar, diminuir, maximo, mudo, ou um valor exato em porcentagem (ex.: volume em 30%).",
+            mapOf(
+                "acao" to ("STRING" to "aumentar, diminuir, maximo, mudo ou definir"),
+                "porcentagem" to ("NUMBER" to "0 a 100, quando o piloto disser um valor (opcional)"),
+            ),
             listOf("acao"),
-        ) { a -> phoneAction { phone.volume(a.optString("acao")) } },
+        ) { a ->
+            val pct = if (a.has("porcentagem")) a.optDouble("porcentagem", -1.0).toInt().takeIf { it in 0..100 } else null
+            phoneAction { phone.volume(a.optString("acao"), pct) }
+        },
         Tool(
             "chamar_piloto",
             "Liga pelo intercomunicador do app para um amigo da lista (o celular dele toca e o Jarvis dele pergunta se pode atender).",
