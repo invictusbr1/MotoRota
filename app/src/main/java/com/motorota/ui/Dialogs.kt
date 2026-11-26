@@ -63,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
 import com.motorota.data.Keys
 import com.motorota.assistant.JarvisVoice
+import com.motorota.assistant.PiperVoice
 import com.motorota.R
 import com.motorota.data.Corridors
 import com.motorota.data.HazardType
@@ -507,6 +509,7 @@ private fun SummaryMetricRow(icon: ImageVector, label: String, value: String) {
 fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, onDismiss: () -> Unit) {
     var tankText by remember { mutableStateOf(if (vm.tankKm > 0) vm.tankKm.toString() else "") }
     var geminiText by remember { mutableStateOf(Keys.geminiSaved()) }
+    var groqText by remember { mutableStateOf(Keys.groqSaved()) }
     var tomtomText by remember { mutableStateOf(Keys.tomtomSaved()) }
     var keysSaved by remember { mutableStateOf(false) }
     var nameText by remember { mutableStateOf(vm.intercom.myName) }
@@ -568,6 +571,41 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                                 Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Jarvis nos seus aplicativos", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Peça por voz: \"abre o Spotify\", \"toca rock\", \"liga pra minha mãe\", " +
+                                "\"manda no WhatsApp pro André que tô chegando\", \"lê minhas mensagens\".",
+                            color = TextDim,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Ler em voz alta as mensagens que chegam", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Switch(checked = vm.readMessagesAloud, onCheckedChange = { vm.toggleReadMessages() })
+                        }
+                        val notifOk = vm.phone.notificationsAllowed()
+                        OutlinedButton(onClick = { vm.phone.openNotificationSettings() }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (notifOk) "Leitura de mensagens: ativada ✓" else "1. Ativar leitura de mensagens")
+                        }
+                        val accOk = com.motorota.assistant.WhatsAppSender.enabled(LocalContext.current)
+                        OutlinedButton(onClick = { vm.phone.openAccessibilitySettings() }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (accOk) "Envio automático no WhatsApp: ativado ✓" else "2. Ativar envio automático no WhatsApp")
+                        }
+                        Text(
+                            "No 2, procure \"MotoRota: Jarvis envia WhatsApp\" em Acessibilidade (às vezes em Apps instalados) e ative. " +
+                                "Ele só toca em Enviar logo depois de você pedir uma mensagem.",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
                     }
                 }
 
@@ -689,7 +727,13 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                             )
                         }
                         Text("Voz do Jarvis (toque para ouvir)", color = Color.White, fontSize = 14.5.sp)
-                        (JarvisVoice.VOICES + ("celular" to "Voz do celular (sem internet)")).forEach { (id, label) ->
+                        val voices = PiperVoice.VOICES.map { "piper:${it.first}" to "${it.second} · sem limite, offline" } +
+                            JarvisVoice.VOICES.map { it.first to "${it.second} · Google, poucas por dia" } +
+                            ("celular" to "Voz do celular (robótica)")
+                        vm.voiceDownload?.let { p ->
+                            Text("Baixando a voz… $p%", color = Color(0xFF93C5FD), fontSize = 12.5.sp)
+                        }
+                        voices.forEach { (id, label) ->
                             val sel = vm.jarvisVoice == id
                             Row(
                                 Modifier
@@ -708,6 +752,18 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                                 Text(label, color = Color.White, fontSize = 14.sp)
                             }
                         }
+                        OutlinedTextField(
+                            value = groqText,
+                            onValueChange = { groqText = it.trim(); keysSaved = false },
+                            label = { Text(if (Keys.groqBuiltIn) "Chave do Groq (já configurada)" else "Chave do Groq (recomendada: rápida e grátis)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Grátis em console.groq.com/keys. O Jarvis usa o Groq primeiro e o Gemini de reserva.",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
                         OutlinedTextField(
                             value = geminiText,
                             onValueChange = { geminiText = it.trim(); keysSaved = false },
@@ -733,7 +789,7 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                             fontSize = 12.sp,
                         )
                         Button(
-                            onClick = { Keys.save(tomtomText, geminiText); keysSaved = true },
+                            onClick = { Keys.save(tomtomText, geminiText); Keys.saveGroq(groqText); keysSaved = true },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (keysSaved) "Chaves salvas ✓" else "Salvar chaves") }
                         OutlinedButton(

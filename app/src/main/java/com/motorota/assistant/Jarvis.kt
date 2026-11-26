@@ -38,6 +38,7 @@ class Jarvis(
 ) {
     private val prefs = ctx.getSharedPreferences("preferencias", Context.MODE_PRIVATE)
     private val brain = Brain(tools)
+    private val groq = GroqBrain(tools)
     private val input = SpeechInput(ctx)
     private val wake = WakeWord(ctx) { scope.launch { converse(fromWake = true) } }
 
@@ -124,8 +125,29 @@ class Jarvis(
         resumeWake()
     }
 
+    /** Groq primeiro (rápido); se não tiver chave ou falhar, Gemini. */
+    private suspend fun think(prompt: String, text: String): String {
+        val g = Keys.groq
+        val k = Keys.gemini
+        if (g.isNotBlank()) {
+            try {
+                return groq.ask(g, prompt, text)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (k.isBlank()) throw e
+            }
+        }
+        return brain.ask(k, prompt, text)
+    }
+
     /** Relatório do botão "Testar o Jarvis" nos Ajustes. */
-    suspend fun diagnose(): String = brain.diagnose(Keys.gemini)
+    suspend fun diagnose(): String {
+        val parts = ArrayList<String>()
+        if (Keys.groq.isNotBlank()) parts.add(groq.diagnose(Keys.groq)) else parts.add("Groq: sem chave (opcional, mas deixa o Jarvis bem mais rápido)")
+        if (Keys.gemini.isNotBlank()) parts.add(brain.diagnose(Keys.gemini)) else parts.add("Gemini: sem chave")
+        return parts.joinToString("\n")
+    }
 
     fun dismissReply() {
         reply = ""
@@ -143,8 +165,8 @@ class Jarvis(
             wake.stop()
             try {
                 val key = Keys.gemini
-                if (key.isBlank()) {
-                    reply = "Falta a chave do Gemini. Coloque em Ajustes, Assistente Jarvis."
+                if (key.isBlank() && Keys.groq.isBlank()) {
+                    reply = "Falta a chave do Groq ou do Gemini. Coloque em Ajustes, Assistente Jarvis."
                     replyVersion++
                     status = JarvisStatus.SPEAKING
                     speak(reply)
@@ -198,7 +220,7 @@ class Jarvis(
                     val answer = try {
                         // roda à parte: se o Google travar, o Jarvis desiste em vez de ficar "pensando" para sempre
                         val prompt = systemPrompt()
-                        val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { brain.ask(key, prompt, text) }
+                        val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { think(prompt, text) }
                         kotlinx.coroutines.withTimeoutOrNull(55_000) { job.await() } ?: run {
                             job.cancel()
                             "O Gemini demorou demais para responder. Teste em Ajustes, Testar o Jarvis."

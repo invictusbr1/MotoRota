@@ -16,6 +16,9 @@ import androidx.lifecycle.viewModelScope
 import android.speech.tts.UtteranceProgressListener
 import com.motorota.assistant.Jarvis
 import com.motorota.assistant.JarvisVoice
+import com.motorota.assistant.MessageListener
+import com.motorota.assistant.PhoneActions
+import com.motorota.assistant.PiperVoice
 import com.motorota.assistant.Tool
 import com.motorota.intercom.CallState
 import com.motorota.intercom.Intercom
@@ -1040,6 +1043,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     val jarvis: Jarvis by jarvisDelegate
 
+    // ---------- Acesso aos aplicativos ----------
+    val phone by lazy { PhoneActions(getApplication()) }
+    /** permissões que o Jarvis precisa pedir agora (a tela mostra o pedido) */
+    var permissionAsk by mutableStateOf<List<String>?>(null)
+    /** ler em voz alta as mensagens que chegam (WhatsApp/Telegram/SMS) */
+    var readMessagesAloud by mutableStateOf(prefs.getBoolean("ler_mensagens", true)); private set
+    fun toggleReadMessages() {
+        readMessagesAloud = !readMessagesAloud
+        prefs.edit().putBoolean("ler_mensagens", readMessagesAloud).apply()
+    }
+
+    private suspend fun phoneAction(block: () -> String): String = withContext(Dispatchers.Main) {
+        try {
+            block()
+        } catch (e: PhoneActions.NeedPermission) {
+            permissionAsk = e.permissions
+            e.message ?: "Preciso de uma permissão."
+        }
+    }
+
+    init {
+        // mensagem nova: o Jarvis avisa (com o app aberto), sem ler o texto se estiver em chamada
+        MessageListener.onNew = { m ->
+            viewModelScope.launch {
+                if (!readMessagesAloud) return@launch
+                if (jarvisDelegate.isInitialized() && jarvis.busyNow) return@launch
+                if (intercomDelegate.isInitialized() && intercom.busy) return@launch
+                speakAndWait("Mensagem de ${m.from} no ${m.app}: ${m.text.take(200)}")
+            }
+        }
+    }
+
     // ---------- Intercomunicador ----------
     private val intercomDelegate = lazy {
         Intercom(
@@ -1094,10 +1129,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Fala e só volta quando terminar (o Jarvis espera para voltar a ouvir). Ignora o "mudo" dos avisos. */
     /** voz do Jarvis: nome de uma voz do Google (Gemini) ou "celular" (voz do próprio Android) */
-    var jarvisVoice by mutableStateOf(prefs.getString("jarvis_voz", "Charon") ?: "Charon"); private set
+    // padrão: voz offline Piper "faber" (grátis e sem limite). Quem já tinha escolhido outra, mantém.
+    var jarvisVoice by mutableStateOf(prefs.getString("jarvis_voz2", null) ?: "piper:faber"); private set
+    /** progresso do download da voz offline (0-100), ou null se não está baixando */
+    var voiceDownload by mutableStateOf<Int?>(null); private set
+
     fun setJarvisVoiceName(v: String) {
         jarvisVoice = v
-        prefs.edit().putString("jarvis_voz", v).apply()
+        prefs.edit().putString("jarvis_voz2", v).apply()
+        if (v.startsWith("piper:")) ensurePiper(v.removePrefix("piper:"))
+    }
+
+    /** Baixa a voz offline se ainda não tiver (uma vez só, ~65 MB). */
+    fun ensurePiper(id: String) {
+        val ctx = getApplication<Application>()
+        if (PiperVoice.ready(ctx, id)) {
+            viewModelScope.launch { PiperVoice.warmUp(ctx, id) }
+            return
+        }
+        if (PiperVoice.downloading != null) return
+        viewModelScope.launch {
+            message = "Baixando a voz do Jarvis (65 MB, só desta vez). Use Wi-Fi se puder."
+            val watcher = launch {
+                while (true) {
+                    voiceDownload = PiperVoice.progress
+                    delay(500)
+                }
+            }
+            try {
+                PiperVoice.download(ctx, id)
+                PiperVoice.warmUp(ctx, id)
+                message = "Voz do Jarvis pronta!"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = "Não deu para baixar a voz agora (${e.message}). Tento de novo depois."
+            } finally {
+                watcher.cancel()
+                voiceDownload = null
+            }
+        }
     }
 
     private var voiceQuotaWarned = false
@@ -1120,8 +1191,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun speakAndWait(text: String) {
         if (text.isBlank()) return
+        val inCallNow = intercomDelegate.isInitialized() && intercom.inCall
+        // Voz offline (Piper): grátis, sem limite e sem internet
+        if (jarvisVoice.startsWith("piper:")) {
+            val id = jarvisVoice.removePrefix("piper:")
+            val ctx = getApplication<Application>()
+            if (PiperVoice.ready(ctx, id)) {
+                val audio = PiperVoice.synth(ctx, id, text)
+                if (audio != null) {
+                    tts?.stop()
+                    lastUrgentSpeechMs = SystemClock.elapsedRealtime()
+                    runCatching { JarvisVoice.play(audio, inCallNow) }
+                    return
+                }
+            } else {
+                ensurePiper(id) // enquanto baixa, fala com a voz do celular
+            }
+        }
         // Voz natural do Google; se não der (sem internet, limite), cai na voz do celular
-        if (jarvisVoice != "celular" && Keys.gemini.isNotBlank()) {
+        if (!jarvisVoice.startsWith("piper:") && jarvisVoice != "celular" && Keys.gemini.isNotBlank()) {
             val audio = runCatching { JarvisVoice.synth(Keys.gemini, text, jarvisVoice) }.getOrNull()
             if (audio == null && JarvisVoice.quotaHit && !voiceQuotaWarned) {
                 voiceQuotaWarned = true
@@ -1169,6 +1257,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Ao confirmar uma rota, diga o bairro/cidade e a distância do destino escolhido (vêm no resultado da função), para o piloto perceber se for o lugar errado. Se ele disser que está errado, chame navegar_para de novo com o nome mais completo (ex.: "Xerém, Duque de Caxias").
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
+            - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador.
             - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
             Situação agora: $quando. Localização: $onde. Velocidade: $speedKmh km/h. Estado: $rota.
             Intercomunicador: ${intercomStatus()}
@@ -1189,6 +1278,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun jarvisTools(): List<Tool> = listOf(
+        Tool(
+            "abrir_aplicativo",
+            "Abre qualquer aplicativo instalado no celular pelo nome (ex.: Spotify, YouTube, Waze, Calculadora, Banco).",
+            mapOf("nome" to ("STRING" to "nome do aplicativo")),
+            listOf("nome"),
+        ) { a -> phoneAction { phone.openApp(a.optString("nome")) } },
+        Tool(
+            "ligar_para_contato",
+            "Faz uma ligação telefônica normal para um contato da agenda do celular.",
+            mapOf("contato" to ("STRING" to "nome do contato, como o piloto falou")),
+            listOf("contato"),
+        ) { a -> phoneAction { phone.call(a.optString("contato")) } },
+        Tool(
+            "enviar_whatsapp",
+            "Manda uma mensagem de WhatsApp para um contato da agenda. Escreva a mensagem do jeito que o piloto pediu, em primeira pessoa.",
+            mapOf(
+                "contato" to ("STRING" to "nome do contato"),
+                "mensagem" to ("STRING" to "texto da mensagem"),
+            ),
+            listOf("contato", "mensagem"),
+        ) { a -> phoneAction { phone.whatsapp(a.optString("contato"), a.optString("mensagem")) } },
+        Tool(
+            "ler_mensagens",
+            "Lê em voz alta as mensagens novas que chegaram (WhatsApp, Telegram, SMS).",
+        ) { _ -> phoneAction { phone.readMessages() } },
+        Tool(
+            "musica",
+            "Controla a música do celular (Spotify ou outro): tocar, pausar, próxima, anterior; ou tocar uma música/artista/playlist pelo nome.",
+            mapOf(
+                "acao" to ("STRING" to "tocar, pausar, proxima ou anterior"),
+                "busca" to ("STRING" to "música, artista ou playlist para tocar (opcional)"),
+            ),
+            listOf("acao"),
+        ) { a -> phoneAction { phone.music(a.optString("acao"), a.optString("busca").takeIf { it.isNotBlank() }) } },
+        Tool(
+            "volume",
+            "Aumenta, diminui ou põe no máximo o volume da música.",
+            mapOf("acao" to ("STRING" to "aumentar, diminuir ou maximo")),
+            listOf("acao"),
+        ) { a -> phoneAction { phone.volume(a.optString("acao")) } },
         Tool(
             "chamar_piloto",
             "Liga pelo intercomunicador do app para um amigo da lista (o celular dele toca e o Jarvis dele pergunta se pode atender).",

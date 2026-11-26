@@ -113,12 +113,22 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
         }
     }
 
+    // Pedidos de permissão do Jarvis (contatos, ligação)
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        vm.permissionAsk = null
+        vm.message = if (res.values.all { it }) "Pronto! Pode pedir de novo ao Jarvis." else "Sem essa permissão o Jarvis não consegue fazer isso."
+    }
+    LaunchedEffect(vm.permissionAsk) {
+        vm.permissionAsk?.let { permLauncher.launch(it.toTypedArray()) }
+    }
+
     // Liga/desliga o microfone do Jarvis quando o app aparece ou some da tela
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, e ->
             when (e) {
                 Lifecycle.Event.ON_START -> {
+                    if (vm.jarvisVoice.startsWith("piper:")) vm.ensurePiper(vm.jarvisVoice.removePrefix("piper:"))
                     vm.intercom.start()
                     vm.jarvis.setForeground(true)
                 }

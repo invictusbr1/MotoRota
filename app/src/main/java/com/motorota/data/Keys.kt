@@ -21,6 +21,18 @@ object Keys {
     val gemini: String
         get() = prefs?.getString("gemini", null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.GEMINI_KEY
 
+    /** Groq: cérebro principal do Jarvis (muito rápido, grátis com limite diário) */
+    val groq: String
+        get() = prefs?.getString("groq", null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.GROQ_KEY
+
+    val groqBuiltIn: Boolean get() = BuildConfig.GROQ_KEY.isNotBlank()
+
+    fun groqSaved(): String = prefs?.getString("groq", null).orEmpty()
+
+    fun saveGroq(key: String) {
+        prefs?.edit()?.putString("groq", key.trim())?.apply()
+    }
+
     /** a chave já veio embutida no app (chaves.txt / segredos do GitHub) */
     val geminiBuiltIn: Boolean get() = BuildConfig.GEMINI_KEY.isNotBlank()
     val tomtomBuiltIn: Boolean get() = BuildConfig.TOMTOM_KEY.isNotBlank()

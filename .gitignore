@@ -14,3 +14,4 @@ enviar-atualizacao.bat
 chaves.txt
 configurar-chaves.bat
 configurar-chaves.ps1
+app/libs/*.aar

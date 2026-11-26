@@ -31,9 +31,11 @@ android {
                 .firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
         val tomtomKey = chave("TOMTOM_KEY", localProps.getProperty("tomtom.key"))
         val geminiKey = chave("GEMINI_KEY")
+        val groqKey = chave("GROQ_KEY")
         val githubRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "invictusbr1/MotoRota"
         buildConfigField("String", "TOMTOM_KEY", "\"" + tomtomKey + "\"")
         buildConfigField("String", "GEMINI_KEY", "\"" + geminiKey + "\"")
+        buildConfigField("String", "GROQ_KEY", "\"" + groqKey + "\"")
         buildConfigField("String", "GITHUB_REPO", "\"" + githubRepo + "\"")
         ndk { abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a,armeabi-v7a").split(",") }
     }
@@ -84,6 +86,12 @@ dependencies {
     // Jarvis: reconhece a palavra "Jarvis" offline no celular
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+
+    // Voz do Jarvis offline e sem limite (Piper / sherpa-onnx). O .aar é baixado pelo GitHub Actions
+    // (ou pelo script baixar-voz-offline) para app/libs, porque é grande demais para o repositório.
+    implementation(files("libs/sherpa-onnx.aar"))
+    // descompactar o modelo de voz (.tar.bz2) baixado na primeira vez
+    implementation("org.apache.commons:commons-compress:1.26.2")
 
     // Intercomunicador: conexão em tempo real com a central
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">MotoRota</string>
+    <string name="acessibilidade_descricao">Permite ao Jarvis tocar em Enviar no WhatsApp quando você pede por voz para mandar uma mensagem. Só age logo depois do seu pedido e só no WhatsApp.</string>
 </resources>

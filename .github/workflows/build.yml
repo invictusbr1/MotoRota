@@ -28,10 +28,16 @@ jobs:
           mkdir -p keystore
           echo "$KEYSTORE_BASE64" | base64 -d > keystore/motorota.jks
 
+      - name: Biblioteca de voz offline (sherpa-onnx)
+        run: |
+          mkdir -p app/libs
+          curl -sSfL -o app/libs/sherpa-onnx.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar
+
       - name: Compilar
         env:
           TOMTOM_KEY: ${{ secrets.TOMTOM_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GROQ_KEY: ${{ secrets.GROQ_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
