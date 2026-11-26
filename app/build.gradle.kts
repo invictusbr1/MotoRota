@@ -84,4 +84,7 @@ dependencies {
     // Jarvis: reconhece a palavra "Jarvis" offline no celular
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+
+    // Intercomunicador: conexão em tempo real com a central
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

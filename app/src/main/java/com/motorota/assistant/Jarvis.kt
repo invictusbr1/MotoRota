@@ -29,6 +29,11 @@ class Jarvis(
     private val systemPrompt: () -> String,
     private val speak: suspend (String) -> Unit,
     private val notify: (String) -> Unit,
+    /** chamada do intercomunicador em andamento (o microfone é dela) */
+    private val inCall: () -> Boolean = { false },
+    /** antes de ouvir: pausa o microfone da chamada e liga o microfone do capacete */
+    private val beforeListen: suspend () -> Unit = {},
+    private val afterListen: () -> Unit = {},
 ) {
     private val prefs = ctx.getSharedPreferences("preferencias", Context.MODE_PRIVATE)
     private val brain = Brain(tools)
@@ -77,7 +82,7 @@ class Jarvis(
     }
 
     private fun startWake() {
-        if (!wakeOn || !foreground || !hasMic()) return
+        if (!wakeOn || !foreground || !hasMic() || inCall()) return
         if (prepareJob?.isActive == true) return
         prepareJob = scope.launch {
             try {
@@ -87,7 +92,7 @@ class Jarvis(
                     wake.ensureModel { p -> scope.launch { prepareProgress = p } }
                 }
                 wake.load()
-                if (!wakeOn || !foreground || busyNow) return@launch
+                if (!wakeOn || !foreground || busyNow || inCall()) return@launch
                 if (wake.start()) status = JarvisStatus.WAITING
                 else {
                     status = JarvisStatus.OFF
@@ -156,7 +161,12 @@ class Jarvis(
                     replyVersion++
                     beep()
                     delay(180)
-                    val text = input.listen { partial -> heard = partial }?.trim().orEmpty()
+                    beforeListen()
+                    val text = try {
+                        input.listen { partial -> heard = partial }?.trim().orEmpty()
+                    } finally {
+                        afterListen()
+                    }
                     if (text.isBlank()) {
                         if (!fromWake || rounds > 1) break
                         status = JarvisStatus.SPEAKING
@@ -193,6 +203,73 @@ class Jarvis(
                 busy = null
                 resumeWake()
             }
+        }
+    }
+
+    /** Chamada do intercomunicador começou: o microfone passa a ser da chamada. */
+    fun pauseForCall() {
+        prepareJob?.cancel()
+        wake.stop()
+        if (status == JarvisStatus.WAITING) status = JarvisStatus.OFF
+    }
+
+    /** Chamada acabou: volta a esperar o "Jarvis". */
+    fun resumeAfterCall() {
+        if (!busyNow) resumeWake()
+    }
+
+    /** Detector do "Jarvis" que escuta pelo microfone da chamada (null se o modelo não estiver pronto). */
+    fun feederForCall(): WakeWord.Feeder? = wake.feeder()
+
+    /**
+     * Faz uma pergunta em voz alta e ouve a resposta: true = sim, false = não,
+     * null = não entendeu / não deu para ouvir (o chamado continua tocando na tela).
+     */
+    suspend fun askYesNo(question: String): Boolean? {
+        if (busyNow) return null
+        wake.stop()
+        try {
+            reply = question
+            replyVersion++
+            status = JarvisStatus.SPEAKING
+            speak(question)
+            if (!hasMic() || !input.available()) return null
+            repeat(2) { attempt ->
+                status = JarvisStatus.LISTENING
+                heard = ""
+                beep()
+                delay(180)
+                beforeListen()
+                val t = try {
+                    input.listen { partial -> heard = partial }
+                } finally {
+                    afterListen()
+                }
+                val ans = t?.let { yesNo(it) }
+                if (t != null) heard = t
+                if (ans != null) return ans
+                if (attempt == 0) {
+                    status = JarvisStatus.SPEAKING
+                    speak("Atendo? Sim ou não?")
+                }
+            }
+            return null
+        } finally {
+            status = JarvisStatus.OFF
+            resumeWake()
+        }
+    }
+
+    private fun yesNo(t: String): Boolean? {
+        val s = java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "")
+        val words = s.split(Regex("[^a-z]+")).filter { it.isNotEmpty() }
+        val no = listOf("nao", "recusa", "recuse", "depois", "ocupado", "negativo", "deixa")
+        val yes = listOf("sim", "pode", "atende", "atenda", "atender", "manda", "bora", "claro", "ok", "beleza", "fala", "quero", "positivo", "liga")
+        return when {
+            words.any { it in no } -> false
+            words.any { it in yes } -> true
+            else -> null
         }
     }
 

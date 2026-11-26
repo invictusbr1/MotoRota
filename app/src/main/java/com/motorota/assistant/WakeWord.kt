@@ -109,6 +109,39 @@ class WakeWord(private val ctx: Context, private val onWake: () -> Unit) {
         runCatching { s.shutdown() }
     }
 
+    /**
+     * Detector alimentado com áudio de fora (16 kHz). Usado durante a chamada do intercomunicador,
+     * quando o microfone já está aberto pela chamada.
+     */
+    inner class Feeder internal constructor(private val rec: Recognizer) {
+        private var lastHit = 0L
+
+        fun feed(buf: ShortArray, n: Int) {
+            val final = rec.acceptWaveForm(buf, n)
+            val hit = if (final) heard(rec.result, "text") else heard(rec.partialResult, "partial")
+            if (!hit) return
+            rec.reset()
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastHit < 4000) return
+            lastHit = now
+            android.os.Handler(android.os.Looper.getMainLooper()).post { onWake() }
+        }
+
+        fun close() {
+            runCatching { rec.close() }
+        }
+    }
+
+    /** null se o modelo ainda não foi carregado. */
+    fun feeder(): Feeder? {
+        val m = model ?: return null
+        return try {
+            Feeder(Recognizer(m, 16000f, GRAMMAR))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun release() {
         stop()
         runCatching { model?.close() }

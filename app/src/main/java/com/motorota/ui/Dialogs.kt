@@ -25,6 +25,10 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocalGasStation
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.Headset
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OpenWith
 import androidx.compose.material.icons.rounded.Place
@@ -503,6 +507,11 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
     var geminiText by remember { mutableStateOf(Keys.geminiSaved()) }
     var tomtomText by remember { mutableStateOf(Keys.tomtomSaved()) }
     var keysSaved by remember { mutableStateOf(false) }
+    var nameText by remember { mutableStateOf(vm.intercom.myName) }
+    var friendCode by remember { mutableStateOf("") }
+    var friendNick by remember { mutableStateOf("") }
+    var icInfo by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DialogBg,
@@ -553,6 +562,89 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                                 colors = ButtonDefaults.buttonColors(containerColor = NavGreen, contentColor = Color(0xFF042617)),
                             ) {
                                 Text("Abasteci (zerar hodômetro)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    color = SurfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val ic = vm.intercom
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Headset, null, tint = NavGreen, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Intercomunicador", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            Text(
+                                if (ic.online) "● online" else "● offline",
+                                color = if (ic.online) NavGreen else TextDim,
+                                fontSize = 12.5.sp,
+                            )
+                        }
+                        Text(
+                            "Fale com amigos que usam o MotoRota pela internet: \"Jarvis, chama o André\". " +
+                                "O Jarvis dele pergunta se pode atender. Funciona com o app aberto.",
+                            color = TextDim,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = nameText,
+                                onValueChange = { nameText = it.take(40) },
+                                label = { Text("Seu nome") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { scope.launch { icInfo = ic.setName(nameText) } }) { Text("Salvar") }
+                        }
+                        if (ic.myCode.isNotBlank()) {
+                            Text("Seu código: ${ic.myCode}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("Passe esse código para os amigos te adicionarem.", color = TextDim, fontSize = 12.sp)
+                        }
+                        HorizontalDivider(color = PanelBorder)
+                        Text("Adicionar amigo", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = friendCode,
+                                onValueChange = { t -> friendCode = t.filter { it.isDigit() }.take(6) },
+                                label = { Text("Código") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedTextField(
+                                value = friendNick,
+                                onValueChange = { friendNick = it.take(30) },
+                                label = { Text("Como chamar") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1.3f),
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    icInfo = ic.addFriend(friendCode, friendNick)
+                                    if (icInfo.contains("adicionado")) { friendCode = ""; friendNick = "" }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Adicionar") }
+                        if (icInfo.isNotBlank()) Text(icInfo, color = Color(0xFF93C5FD), fontSize = 12.5.sp)
+                        ic.friends.forEach { f ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(f.name, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { withMic { vm.message = ic.call(f) } }) {
+                                    Icon(Icons.Rounded.Call, "Chamar ${f.name}", tint = NavGreen)
+                                }
+                                IconButton(onClick = { ic.removeFriend(f.id) }) {
+                                    Icon(Icons.Rounded.DeleteOutline, "Remover ${f.name}", tint = TextDim)
+                                }
                             }
                         }
                     }

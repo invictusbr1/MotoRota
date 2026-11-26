@@ -27,7 +27,6 @@ class BrainException(message: String) : Exception(message)
 class Brain(private val tools: List<Tool>) {
     private val history = ArrayList<JSONObject>()
     private var workingModel: String? = null
-    private var useThinkingOff = true
     /** null = decide pelo formato da chave; true/false = já descobriu qual serviço funciona */
     private var useVertex: Boolean? = null
 
@@ -109,52 +108,59 @@ class Brain(private val tools: List<Tool>) {
         val models = listOfNotNull(workingModel) + MODELS.filter { it != workingModel }
         var lastErr = "sem resposta"
         for (model in models) {
-            for (attempt in 0..1) {
-                val gen = JSONObject().put("temperature", 0.6).put("maxOutputTokens", 600)
-                if (useThinkingOff && attempt == 0) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
-                val body = JSONObject()
-                    .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
-                    .put("contents", JSONArray(contents))
-                    .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", declarations())))
-                    .put("generationConfig", gen)
-                // Chave "AIza..." = Gemini do AI Studio; chave "AQ...." = Vertex AI (modo express) do Google Cloud
-                val vertex = useVertex ?: key.startsWith("AQ.")
-                val url = if (vertex) {
-                    "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
-                        java.net.URLEncoder.encode(key, "UTF-8")
+            val gen = JSONObject().put("temperature", 0.6).put("maxOutputTokens", 800)
+            // só a família 2.5 aceita desligar o "raciocínio" assim; as novas ficam no padrão
+            if (model.startsWith("gemini-2.5")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+            val body = JSONObject()
+                .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
+                .put("contents", JSONArray(contents))
+                .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", declarations())))
+                .put("generationConfig", gen)
+                .toString()
+
+            // Chave "AIza..." = Gemini do AI Studio; chave "AQ...." = Vertex AI (modo express) do Google Cloud
+            val first = useVertex ?: key.startsWith("AQ.")
+            var (code, text) = post(endpoint(first, model, key), if (first) null else key, body)
+            if ((code == 401 || code == 403) && useVertex == null) {
+                // tenta o outro serviço do Google com a mesma chave
+                val (code2, text2) = post(endpoint(!first, model, key), if (!first) null else key, body)
+                if (code2 != 401 && code2 != 403) {
+                    useVertex = !first
+                    code = code2
+                    text = text2
                 } else {
-                    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+                    Log.w("MotoRota", "Gemini $code/$code2: ${text.take(300)} | ${text2.take(300)}")
                 }
-                val (code, text) = post(url, if (vertex) null else key, body.toString())
-                if ((code == 401 || code == 403) && useVertex == null) {
-                    // tenta o outro serviço do Google com a mesma chave antes de desistir
-                    useVertex = !vertex
-                    val url2 = if (!vertex) {
-                        "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
-                            java.net.URLEncoder.encode(key, "UTF-8")
-                    } else {
-                        "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-                    }
-                    val (code2, text2) = post(url2, if (!vertex) null else key, body.toString())
-                    if (code2 in 200..299) { workingModel = model; return JSONObject(text2) }
-                    useVertex = null
-                    Log.w("MotoRota", "Gemini ${code}/${code2}: ${text.take(300)} | ${text2.take(300)}")
-                    throw BrainException(friendly(code2, text2))
+            } else if (code in 200..299 || code == 404) {
+                if (useVertex == null && code in 200..299) useVertex = first
+            }
+            when {
+                code in 200..299 -> {
+                    workingModel = model
+                    return JSONObject(text)
                 }
-                when {
-                    code in 200..299 -> { workingModel = model; return JSONObject(text) }
-                    code == 400 && text.contains("API key", ignoreCase = true) -> throw BrainException(friendly(code, text))
-                    code == 401 || code == 403 || code == 429 -> throw BrainException(friendly(code, text))
-                    code == 400 && attempt == 0 && text.contains("thinking", ignoreCase = true) -> {
-                        useThinkingOff = false; lastErr = "HTTP 400"; continue
-                    }
-                    code == 404 || code == 400 -> { lastErr = "HTTP $code"; break } // tenta o próximo modelo
-                    else -> throw BrainException("Erro no Gemini (HTTP $code).")
+                code == 404 || (code == 400 && text.contains("model", ignoreCase = true) && !text.contains("API key", ignoreCase = true)) -> {
+                    lastErr = "modelo $model indisponível"
+                    continue // tenta o próximo modelo
+                }
+                code == 400 && text.contains("API key", ignoreCase = true) -> throw BrainException(friendly(code, text))
+                code == 401 || code == 403 || code == 429 -> throw BrainException(friendly(code, text))
+                else -> {
+                    lastErr = "HTTP $code"
+                    Log.w("MotoRota", "Gemini $model HTTP $code: ${text.take(300)}")
                 }
             }
         }
         throw BrainException("Não consegui falar com o Gemini ($lastErr).")
     }
+
+    private fun endpoint(vertex: Boolean, model: String, key: String): String =
+        if (vertex) {
+            "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
+                java.net.URLEncoder.encode(key, "UTF-8")
+        } else {
+            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        }
 
     /** Mensagem curta (vai ser falada) explicando o erro do Google. */
     private fun friendly(code: Int, text: String): String {
@@ -190,6 +196,10 @@ class Brain(private val tools: List<Tool>) {
     }
 
     companion object {
-        private val MODELS = listOf("gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash")
+        // do mais novo para o mais antigo; o primeiro que existir na conta fica memorizado
+        private val MODELS = listOf(
+            "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash",
+            "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash",
+        )
     }
 }

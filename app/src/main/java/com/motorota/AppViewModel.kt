@@ -16,6 +16,9 @@ import androidx.lifecycle.viewModelScope
 import android.speech.tts.UtteranceProgressListener
 import com.motorota.assistant.Jarvis
 import com.motorota.assistant.Tool
+import com.motorota.intercom.CallState
+import com.motorota.intercom.Intercom
+import android.media.AudioAttributes
 import com.motorota.data.Corridor
 import com.motorota.data.Keys
 import com.motorota.data.Corridors
@@ -346,6 +349,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         NavigationBridge.onStopRequested = null
         NavigationService.stop(getApplication())
         if (jarvisDelegate.isInitialized()) jarvis.release()
+        if (intercomDelegate.isInitialized()) intercom.release()
         tts?.shutdown()
     }
 
@@ -776,6 +780,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (urgent) lastUrgentSpeechMs = now
             TextToSpeech.QUEUE_FLUSH
         }
+        tts?.let { applyTtsRoute(it) }
         tts?.speak(text, queueMode, null, text.hashCode().toString())
     }
 
@@ -1021,9 +1026,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             systemPrompt = ::jarvisPrompt,
             speak = ::speakAndWait,
             notify = { message = it },
+            inCall = { intercomDelegate.isInitialized() && intercom.inCall },
+            beforeListen = ::beforeJarvisListens,
+            afterListen = ::afterJarvisListens,
         )
     }
     val jarvis: Jarvis by jarvisDelegate
+
+    // ---------- Intercomunicador ----------
+    private val intercomDelegate = lazy {
+        Intercom(
+            ctx = getApplication(),
+            scope = viewModelScope,
+            speak = ::speakAndWait,
+            askYesNo = { q -> jarvis.askYesNo(q) },
+            notify = { message = it },
+            onAudioStart = { jarvis.pauseForCall() },
+            onAudioEnd = { jarvis.resumeAfterCall() },
+            wakeFeeder = { jarvis.feederForCall() },
+        )
+    }
+    val intercom: Intercom by intercomDelegate
+    private var jarvisHeldRoute = false
+
+    /** Jarvis vai ouvir: solta o microfone da chamada e, com capacete conectado, usa o microfone dele. */
+    private suspend fun beforeJarvisListens() {
+        val ic = intercom
+        if (ic.inCall) {
+            ic.pauseMic()
+            delay(250)
+        }
+        if (!jarvisHeldRoute && ic.route.helmetConnected()) {
+            ic.route.acquire()
+            jarvisHeldRoute = true
+            if (!ic.inCall) delay(700) // o Bluetooth leva um instante para abrir o microfone
+        }
+    }
+
+    private fun afterJarvisListens() {
+        val ic = intercom
+        if (jarvisHeldRoute) {
+            ic.route.release()
+            jarvisHeldRoute = false
+        }
+        if (ic.inCall) ic.resumeMic()
+    }
+
+    /** Em chamada, a voz do Jarvis vai pelo canal da ligação (capacete); fora dela, como mídia. */
+    private fun applyTtsRoute(t: TextToSpeech) {
+        val voice = intercomDelegate.isInitialized() && intercom.inCall
+        runCatching {
+            t.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(if (voice) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+        }
+    }
 
     /** Fala e só volta quando terminar (o Jarvis espera para voltar a ouvir). Ignora o "mudo" dos avisos. */
     suspend fun speakAndWait(text: String) {
@@ -1033,6 +1093,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val done = CompletableDeferred<Unit>()
         speechDone[id] = done
         lastUrgentSpeechMs = SystemClock.elapsedRealtime()
+        applyTtsRoute(t)
         t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         withTimeoutOrNull(4000L + text.length * 110L) { done.await() }
         speechDone.remove(id)
@@ -1057,11 +1118,59 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Se o destino for ambíguo, escolha o mais provável perto do piloto; só pergunte se for impossível decidir.
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
+            - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
             Situação agora: $quando. Localização: $onde. Velocidade: $speedKmh km/h. Estado: $rota.
+            Intercomunicador: ${intercomStatus()}
         """.trimIndent()
     }
 
+    private fun intercomStatus(): String {
+        val ic = intercom
+        val amigos = ic.friends.joinToString(", ") { it.name }.ifBlank { "nenhum amigo cadastrado ainda" }
+        val agora = when (ic.state) {
+            CallState.IDLE -> "sem chamada"
+            CallState.CALLING -> "chamando ${ic.peerName}"
+            CallState.RINGING -> "${ic.peerName} está chamando o piloto agora"
+            CallState.IN_CALL -> "em chamada com ${ic.peerName}"
+        }
+        val nome = ic.myName.ifBlank { "(o piloto ainda não colocou o nome em Ajustes)" }
+        return "nome do piloto: $nome; amigos: $amigos; $agora."
+    }
+
     private fun jarvisTools(): List<Tool> = listOf(
+        Tool(
+            "chamar_piloto",
+            "Liga pelo intercomunicador do app para um amigo da lista (o celular dele toca e o Jarvis dele pergunta se pode atender).",
+            mapOf("nome" to ("STRING" to "nome do amigo, como o piloto falou")),
+            listOf("nome"),
+        ) { a ->
+            withContext(Dispatchers.Main) {
+                val ic = intercom
+                val f = ic.findFriend(a.optString("nome"))
+                if (f == null) {
+                    val lista = ic.friends.joinToString(", ") { it.name }
+                    if (lista.isBlank()) "Você ainda não tem amigos no intercomunicador. Adicione pelo código deles em Ajustes."
+                    else "Não achei \"${a.optString("nome")}\" nos amigos. Os amigos são: $lista."
+                } else {
+                    ic.call(f)
+                }
+            }
+        },
+        Tool("encerrar_chamada", "Desliga ou cancela a chamada do intercomunicador.") { _ ->
+            withContext(Dispatchers.Main) {
+                if (intercom.busy) { intercom.hangUp(); "Chamada encerrada." } else "Não há chamada agora."
+            }
+        },
+        Tool("atender_chamada", "Atende a chamada do intercomunicador que está tocando.") { _ ->
+            withContext(Dispatchers.Main) {
+                if (intercom.state == CallState.RINGING) { intercom.accept(); "Atendendo." } else "Não tem chamada tocando."
+            }
+        },
+        Tool("recusar_chamada", "Recusa a chamada do intercomunicador que está tocando.") { _ ->
+            withContext(Dispatchers.Main) {
+                if (intercom.state == CallState.RINGING) { intercom.reject(); "Chamada recusada." } else "Não tem chamada tocando."
+            }
+        },
         Tool(
             "navegar_para",
             "Traça a rota até um lugar e já começa a navegação guiada por voz.",

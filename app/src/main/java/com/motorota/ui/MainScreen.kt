@@ -118,7 +118,10 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, e ->
             when (e) {
-                Lifecycle.Event.ON_START -> vm.jarvis.setForeground(true)
+                Lifecycle.Event.ON_START -> {
+                    vm.intercom.start()
+                    vm.jarvis.setForeground(true)
+                }
                 Lifecycle.Event.ON_STOP -> vm.jarvis.setForeground(false)
                 else -> {}
             }
@@ -182,12 +185,23 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
             )
         }
 
+        IntercomBar(
+            vm,
+            withMic,
+            Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = if (vm.navigating) 196.dp else 84.dp, start = 12.dp, end = 12.dp)
+                .zIndex(12f),
+        )
+        val bubbleTop = (if (vm.navigating) 196 else 84) + (if (vm.intercom.busy) 92 else 0) +
+            (if (vm.intercom.state == com.motorota.intercom.CallState.RINGING) 58 else 0)
         JarvisBubble(
             vm,
             Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
-                .padding(top = if (vm.navigating) 196.dp else 84.dp, start = 16.dp, end = 16.dp)
+                .padding(top = bubbleTop.dp, start = 16.dp, end = 16.dp)
                 .zIndex(11f),
         )
 
