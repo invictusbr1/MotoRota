@@ -1,5 +1,6 @@
 package com.motorota.assistant
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -27,6 +28,8 @@ class Brain(private val tools: List<Tool>) {
     private val history = ArrayList<JSONObject>()
     private var workingModel: String? = null
     private var useThinkingOff = true
+    /** null = decide pelo formato da chave; true/false = já descobriu qual serviço funciona */
+    private var useVertex: Boolean? = null
 
     fun reset() = history.clear()
 
@@ -114,13 +117,34 @@ class Brain(private val tools: List<Tool>) {
                     .put("contents", JSONArray(contents))
                     .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", declarations())))
                     .put("generationConfig", gen)
-                val (code, text) = post("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent", key, body.toString())
+                // Chave "AIza..." = Gemini do AI Studio; chave "AQ...." = Vertex AI (modo express) do Google Cloud
+                val vertex = useVertex ?: key.startsWith("AQ.")
+                val url = if (vertex) {
+                    "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
+                        java.net.URLEncoder.encode(key, "UTF-8")
+                } else {
+                    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+                }
+                val (code, text) = post(url, if (vertex) null else key, body.toString())
+                if ((code == 401 || code == 403) && useVertex == null) {
+                    // tenta o outro serviço do Google com a mesma chave antes de desistir
+                    useVertex = !vertex
+                    val url2 = if (!vertex) {
+                        "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
+                            java.net.URLEncoder.encode(key, "UTF-8")
+                    } else {
+                        "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+                    }
+                    val (code2, text2) = post(url2, if (!vertex) null else key, body.toString())
+                    if (code2 in 200..299) { workingModel = model; return JSONObject(text2) }
+                    useVertex = null
+                    Log.w("MotoRota", "Gemini ${code}/${code2}: ${text.take(300)} | ${text2.take(300)}")
+                    throw BrainException(friendly(code2, text2))
+                }
                 when {
                     code in 200..299 -> { workingModel = model; return JSONObject(text) }
-                    code == 400 && text.contains("API key", ignoreCase = true) ->
-                        throw BrainException("A chave do Gemini não é válida. Confira nos Ajustes.")
-                    code == 403 -> throw BrainException("A chave do Gemini não tem permissão. Gere outra no AI Studio.")
-                    code == 429 -> throw BrainException("Limite gratuito do Gemini atingido. Tente daqui a pouco.")
+                    code == 400 && text.contains("API key", ignoreCase = true) -> throw BrainException(friendly(code, text))
+                    code == 401 || code == 403 || code == 429 -> throw BrainException(friendly(code, text))
                     code == 400 && attempt == 0 && text.contains("thinking", ignoreCase = true) -> {
                         useThinkingOff = false; lastErr = "HTTP 400"; continue
                     }
@@ -132,14 +156,28 @@ class Brain(private val tools: List<Tool>) {
         throw BrainException("Não consegui falar com o Gemini ($lastErr).")
     }
 
-    private fun post(url: String, key: String, body: String): Pair<Int, String> {
+    /** Mensagem curta (vai ser falada) explicando o erro do Google. */
+    private fun friendly(code: Int, text: String): String {
+        val msg = runCatching { JSONObject(text).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty()
+        return when {
+            code == 429 -> "Limite gratuito do Gemini atingido. Tente daqui a pouco."
+            msg.contains("API key not valid", true) || msg.contains("API_KEY_INVALID", true) ->
+                "A chave do Gemini não é válida. Confira o arquivo de chaves."
+            msg.contains("has not been used", true) || msg.contains("disabled", true) ->
+                "A API do Gemini não está ativada nessa conta do Google. Gere a chave em aistudio.google.com."
+            msg.contains("billing", true) -> "Essa chave do Google pede cobrança ativada. Use uma chave grátis do AI Studio."
+            else -> "O Google recusou a chave do Gemini (erro $code)."
+        }
+    }
+
+    private fun post(url: String, key: String?, body: String): Pair<Int, String> {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.connectTimeout = 10_000
         conn.readTimeout = 30_000
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        conn.setRequestProperty("x-goog-api-key", key)
+        if (key != null) conn.setRequestProperty("x-goog-api-key", key)
         try {
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
