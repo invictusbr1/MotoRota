@@ -1141,6 +1141,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Para qualquer coisa do app (traçar rota, parada, radares, quanto falta, chegada, trânsito, clima, procurar lugares, onde estou, parar navegação, voz dos avisos) USE AS FUNÇÕES. Nunca invente radares, distâncias ou tempos: use só o que as funções devolverem.
             - "Programa a rota pra X", "me leva pra X", "vamos pra X" = navegar_para.
             - Se o destino for ambíguo, escolha o mais provável perto do piloto; só pergunte se for impossível decidir.
+            - Ao confirmar uma rota, diga o bairro/cidade e a distância do destino escolhido (vêm no resultado da função), para o piloto perceber se for o lugar errado. Se ele disser que está errado, chame navegar_para de novo com o nome mais completo (ex.: "Xerém, Duque de Caxias").
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
             - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
@@ -1257,7 +1258,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun jarvisNavigate(dest: String): String {
         if (dest.isBlank()) return "Faltou dizer o destino."
         val here = withContext(Dispatchers.Main) { myLocation }
-        val p = Geocoder.search(dest, here).firstOrNull() ?: return "Não encontrei \"$dest\" no mapa."
+        val found = Geocoder.search(dest, here)
+        val p = found.firstOrNull() ?: return "Não encontrei \"$dest\" no mapa."
+        Http.report("jarvis-destino", "pediu \"$dest\" -> " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
         withContext(Dispatchers.Main) {
             stops = emptyList()
             origin = null

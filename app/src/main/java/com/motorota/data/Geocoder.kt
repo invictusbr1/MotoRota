@@ -40,7 +40,7 @@ object Geocoder {
                 ).joinToString("; ")
                 throw Exception(why)
             }
-            merge(a.getOrDefault(emptyList()) + b.getOrDefault(emptyList()))
+            rank(merge(a.getOrDefault(emptyList()) + b.getOrDefault(emptyList())), q, near)
                 .map { withDistance(it, near) }
                 .take(12)
         }
@@ -79,6 +79,30 @@ object Geocoder {
         throw e
     } catch (e: Exception) {
         Result.failure(e)
+    }
+
+    /**
+     * Ordena do mais provável para o menos provável:
+     * 1) o nome bate exatamente com o que foi pedido ("Xerém" = bairro Xerém, não "Posto Xerém");
+     * 2) começa com o pedido; 3) contém todas as palavras; 4) o resto.
+     * Dentro de cada grupo, o mais perto de você primeiro. Assim o mesmo nome em outro estado fica para trás.
+     */
+    private fun rank(list: List<Place>, query: String, near: GeoPoint?): List<Place> {
+        val q = norm(query).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+        val words = q.split(' ').filter { it.length > 1 }
+        fun nameScore(p: Place): Int {
+            val n = norm(p.name).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+            val all = norm(p.name + " " + p.detail)
+            return when {
+                n == q -> 4
+                n.startsWith("$q ") || n.endsWith(" $q") -> 3
+                words.isNotEmpty() && words.all { n.contains(it) } -> 2
+                words.isNotEmpty() && words.all { all.contains(it) } -> 1
+                else -> 0
+            }
+        }
+        val dist: (Place) -> Double = { p -> near?.distanceTo(p.point) ?: 0.0 }
+        return list.sortedWith(compareByDescending<Place> { nameScore(it) }.thenBy { dist(it) })
     }
 
     /** Remove o mesmo lugar vindo das duas fontes (mesmo nome a menos de 150 m, ou praticamente o mesmo ponto). */
