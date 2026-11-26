@@ -76,6 +76,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
@@ -1288,7 +1289,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             wakeFeeder = { jarvis.feederForCall() },
         )
     }
-    val intercom: Intercom by intercomDelegate
+    val intercom: Intercom by lazy {
+        intercomDelegate.value.also { ic ->
+            ic.onRecado = { r -> announceRecado(r) }
+        }
+    }
+
+    private val recadoQueue = kotlinx.coroutines.sync.Mutex()
+
+    /** Recado de outro piloto: o Jarvis fala na hora (espera terminar o que estiver falando). */
+    private fun announceRecado(r: com.motorota.intercom.Recado) {
+        message = "💬 ${r.fromName}${r.group?.let { " ($it)" } ?: ""}: ${r.text}"
+        viewModelScope.launch {
+            recadoQueue.withLock {
+                var tries = 0
+                while (jarvisDelegate.isInitialized() && jarvis.busyNow && tries < 40) { delay(1500); tries++ }
+                val me = riderName.ifBlank { intercomDelegate.value.myName }.split(' ').firstOrNull().orEmpty()
+                val lead = if (me.isNotBlank()) "$me, " else ""
+                val where = r.group?.let { "no grupo $it, " } ?: ""
+                speakAndWait("$lead${where}recado do ${r.fromName}: ${r.text}")
+            }
+        }
+    }
     private var jarvisHeldRoute = false
 
     /** Jarvis vai ouvir: solta o microfone da chamada e, com capacete conectado, usa o microfone dele. */
@@ -1480,7 +1502,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Ao confirmar uma rota, diga o bairro/cidade e a distância do destino escolhido (vêm no resultado da função), para o piloto perceber se for o lugar errado. Se ele disser que está errado, chame navegar_para de novo com o nome mais completo (ex.: "Xerém, Duque de Caxias").
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
-            - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador.
+            - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador. "Manda mensagem/recado/avisa pro X" = mandar_recado se X for amigo ou grupo do intercomunicador (o Jarvis dele fala em voz alta); se não for, enviar_whatsapp. Se o piloto chamar alguém pelo parentesco ("meu pai"), use o amigo que ele já identificou na conversa ou pergunte qual é.
             - Paradas no caminho ("quero parar num posto no meio do caminho"): use adicionar_parada com lugar e onde. Nunca escolha lugar que obrigue a voltar ou desviar muito; diga em que km fica.
             - Mensagens: se perguntarem "chegou mensagem?" ou "de quem é a mensagem?", diga só de quem chegou; leia o conteúdo apenas se o piloto pedir ("lê a da minha mãe").
             - Mensagens marcadas [seguimento] foram captadas pelo microfone sem o piloto dizer "Jarvis", logo depois de você responder. O piloto costuma estar conversando com a garupa ou com outro piloto pelo intercomunicador. Se a frase não for claramente um pedido ou uma continuação da conversa com você, responda exatamente: [IGNORAR] (nada mais). Na dúvida, [IGNORAR].
@@ -1494,7 +1516,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun intercomStatus(): String {
         val ic = intercom
-        val amigos = ic.friends.joinToString(", ") { it.name }.ifBlank { "nenhum amigo cadastrado ainda" }
+        val amigos = ic.friends.joinToString(", ") { it.name }.ifBlank { "nenhum amigo cadastrado ainda" } +
+            (if (ic.groups.isNotEmpty()) "; grupos: " + ic.groups.joinToString(", ") { g -> "${g.name} (${g.members.joinToString(", ") { it.name }})" } else "") +
+            (if (ic.recent.isNotEmpty()) "; últimos recados recebidos: " + ic.recent.takeLast(5).joinToString(" | ") { "${it.fromName}${it.group?.let { g -> " no $g" } ?: ""}: ${it.text}" } else "")
         val agora = when (ic.state) {
             CallState.IDLE -> "sem chamada"
             CallState.CALLING -> "chamando ${ic.peerName}"
@@ -1579,6 +1603,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     ic.call(f)
                 }
+            }
+        },
+        Tool(
+            "mandar_recado",
+            "Manda um recado pelo MotoRota para um amigo ou grupo do intercomunicador (o Jarvis dele fala o recado em voz alta; " +
+                "se faltar internet, guarda e envia quando voltar). Use para amigos/grupos do app; WhatsApp só se o piloto falar WhatsApp " +
+                "ou a pessoa não estiver nos amigos. Escreva o recado como o piloto falou, em primeira pessoa.",
+            mapOf(
+                "destino" to ("STRING" to "nome do amigo ou do grupo"),
+                "recado" to ("STRING" to "texto do recado"),
+            ),
+            listOf("destino", "recado"),
+        ) { a ->
+            withContext(Dispatchers.Main) {
+                val ic = intercom
+                val d = a.optString("destino")
+                val g = ic.findGroup(d)
+                val f = if (g == null) ic.findFriend(d) else null
+                if (g == null && f == null) {
+                    "Não achei \"$d\" nos amigos nem nos grupos do MotoRota. Amigos: ${ic.friends.joinToString(", ") { it.name }.ifBlank { "nenhum" }}" +
+                        "; grupos: ${ic.groups.joinToString(", ") { it.name }.ifBlank { "nenhum" }}."
+                } else ic.sendRecado(f, g, a.optString("recado"))
             }
         },
         Tool("encerrar_chamada", "Desliga ou cancela a chamada do intercomunicador.") { _ ->

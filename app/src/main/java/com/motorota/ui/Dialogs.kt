@@ -718,6 +718,7 @@ fun SettingsCards(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, se
                 }
             }
         }
+        GroupsCard(vm)
     }
 
     if (show("jarvis")) {

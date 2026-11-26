@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,6 +34,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.sqrt
 
 data class Friend(val id: String, val name: String)
+
+/** Grupo de pilotos (família, turma da trilha...). Vai junto com cada recado, então todos do grupo o recebem. */
+data class Group(val id: String, val name: String, val members: List<Friend>)
+
+/** Recado de voz/texto entre pilotos: fica guardado na central até o outro celular pegar. */
+data class Recado(val fromId: String, val fromName: String, val text: String, val group: String?, val time: Long)
 
 enum class CallState { IDLE, CALLING, RINGING, IN_CALL }
 
@@ -102,7 +109,178 @@ class Intercom(
         if (myName.isBlank()) return
         rt.join(myChannel(myId))
         rt.connect()
-        scope.launch { register() }
+        scope.launch { register(); fetchRecados(); flushOutbox() }
+        if (mailLoop?.isActive != true) mailLoop = scope.launch {
+            // internet de estrada cai: confere a caixa e reenvia o que ficou preso a cada 40 s
+            while (true) {
+                delay(40_000)
+                flushOutbox()
+                fetchRecados()
+            }
+        }
+    }
+
+    // ---------- Recados e grupos ----------
+
+    private var mailLoop: Job? = null
+    var groups by mutableStateOf(loadGroups()); private set
+    var recent by mutableStateOf<List<Recado>>(emptyList()); private set
+    /** recado novo chegou (o app manda o Jarvis falar) */
+    var onRecado: ((Recado) -> Unit)? = null
+    var pendingOut by mutableStateOf(prefsOutbox().length()); private set
+
+    fun createGroup(name: String, memberIds: Collection<String>): String {
+        val n = name.trim().take(30)
+        if (n.isEmpty()) return "Dê um nome para o grupo."
+        val mem = friends.filter { it.id in memberIds }
+        if (mem.isEmpty()) return "Escolha pelo menos um amigo."
+        groups = groups.filter { norm(it.name) != norm(n) } + Group(UUID.randomUUID().toString(), n, mem)
+        saveGroups()
+        return "Grupo $n criado com ${mem.size} piloto(s). Diga \"Jarvis, manda no grupo $n...\"."
+    }
+
+    fun deleteGroup(id: String) {
+        groups = groups.filter { it.id != id }
+        saveGroups()
+    }
+
+    fun findGroup(spoken: String): Group? {
+        val s = norm(spoken).removePrefix("grupo ").removePrefix("o grupo ").removePrefix("a ").trim()
+        if (s.isEmpty()) return null
+        return groups.firstOrNull { norm(it.name) == s }
+            ?: groups.firstOrNull { norm(it.name).contains(s) || s.contains(norm(it.name)) }
+    }
+
+    /** Manda um recado para um amigo ou grupo. Sem internet, guarda e envia assim que voltar. */
+    fun sendRecado(toFriend: Friend?, toGroup: Group?, text: String): String {
+        if (myName.isBlank()) return "Antes, coloque seu nome no MotoRota."
+        val t = text.trim().take(500)
+        if (t.isEmpty()) return "Qual é o recado?"
+        val ids = when {
+            toGroup != null -> toGroup.members.map { it.id }
+            toFriend != null -> listOf(toFriend.id)
+            else -> return "Para quem é o recado?"
+        }.filter { it != myId }.distinct()
+        val extra = JSONObject()
+        if (toGroup != null) {
+            extra.put("grupo", JSONObject().put("id", toGroup.id).put("nome", toGroup.name).put(
+                "membros",
+                JSONArray().apply {
+                    put(JSONObject().put("id", myId).put("nome", myName))
+                    toGroup.members.forEach { put(JSONObject().put("id", it.id).put("nome", it.name)) }
+                },
+            ))
+        }
+        val box = prefsOutbox()
+        box.put(JSONObject().put("para", JSONArray(ids)).put("texto", t).put("extra", extra))
+        saveOutbox(box)
+        scope.launch { flushOutbox() }
+        return if (toGroup != null) "Recado mandado para o grupo ${toGroup.name}." else "Recado mandado para ${toFriend!!.name}."
+    }
+
+    private val outboxLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun flushOutbox() = outboxLock.withLock {
+        var box = prefsOutbox()
+        while (box.length() > 0) {
+            val item = box.getJSONObject(0)
+            val ids = item.getJSONArray("para")
+            val body = JSONObject().put("p_de", myId).put("p_segredo", secret).put("p_para", ids)
+                .put("p_texto", item.getString("texto")).put("p_extra", item.optJSONObject("extra") ?: JSONObject())
+            val (code, text) = rpc("enviar_recado", body) ?: return@withLock // sem internet: tenta depois
+            if (code !in 200..299) {
+                com.motorota.data.Http.report("recado", "enviar HTTP $code ${text.take(200)}")
+                if (code in 500..599 || code == 404) return@withLock // central fora / função ainda não criada: tenta depois
+            } else {
+                for (i in 0 until ids.length()) ping(ids.getString(i))
+            }
+            box = prefsOutbox()
+            val rest = JSONArray()
+            for (i in 1 until box.length()) rest.put(box.get(i))
+            saveOutbox(rest)
+            box = rest
+        }
+    }
+
+    /** Avisa o outro celular na hora (se estiver online) para buscar o recado. */
+    private fun ping(to: String) {
+        val ch = myChannel(to)
+        rt.join(ch)
+        scope.launch {
+            delay(900)
+            rt.broadcast(ch, "recado", JSONObject().put("to", to).put("from", myId))
+            delay(2000)
+            if (to != peerId) rt.leave(ch)
+        }
+    }
+
+    private val inboxLock = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun fetchRecados() = inboxLock.withLock {
+        if (myName.isBlank()) return@withLock
+        val (code, text) = rpc("buscar_recados", JSONObject().put("p_id", myId).put("p_segredo", secret)) ?: return@withLock
+        if (code !in 200..299) return@withLock
+        val arr = runCatching { JSONArray(text) }.getOrNull() ?: return@withLock
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val from = o.optString("de")
+            var gName: String? = null
+            o.optJSONObject("extra")?.optJSONObject("grupo")?.let { g ->
+                gName = g.optString("nome").takeIf { it.isNotBlank() }
+                adoptGroup(g)
+            }
+            val friendName = friends.firstOrNull { it.id == from }?.name ?: o.optString("de_nome")
+            val r = Recado(from, friendName, o.optString("texto"), gName, System.currentTimeMillis())
+            recent = (recent + r).takeLast(20)
+            onRecado?.invoke(r)
+        }
+    }
+
+    /** Recado de um grupo que eu ainda não tinha: entra na minha lista (com os mesmos pilotos). */
+    private fun adoptGroup(g: JSONObject) {
+        val id = g.optString("id").ifBlank { return }
+        val arr = g.optJSONArray("membros") ?: return
+        val mem = (0 until arr.length()).mapNotNull { i ->
+            arr.optJSONObject(i)?.let { m ->
+                val mid = m.optString("id")
+                if (mid.isBlank() || mid == myId) null
+                else friends.firstOrNull { it.id == mid } ?: Friend(mid, m.optString("nome"))
+            }
+        }
+        groups = groups.filter { it.id != id } + Group(id, g.optString("nome").take(30), mem)
+        saveGroups()
+    }
+
+    private fun prefsOutbox(): JSONArray = runCatching { JSONArray(prefs.getString("saida", "[]")) }.getOrDefault(JSONArray())
+
+    private fun saveOutbox(a: JSONArray) {
+        prefs.edit().putString("saida", a.toString()).apply()
+        pendingOut = a.length()
+    }
+
+    private fun loadGroups(): List<Group> {
+        val arr = runCatching { JSONArray(prefs.getString("grupos", "[]")) }.getOrNull() ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val m = o.optJSONArray("membros") ?: JSONArray()
+            Group(
+                o.optString("id"), o.optString("nome"),
+                (0 until m.length()).mapNotNull { j -> m.optJSONObject(j)?.let { Friend(it.optString("id"), it.optString("nome")) } },
+            )
+        }
+    }
+
+    private fun saveGroups() {
+        val arr = JSONArray()
+        groups.forEach { g ->
+            arr.put(
+                JSONObject().put("id", g.id).put("nome", g.name).put(
+                    "membros",
+                    JSONArray().apply { g.members.forEach { put(JSONObject().put("id", it.id).put("nome", it.name)) } },
+                ),
+            )
+        }
+        prefs.edit().putString("grupos", arr.toString()).apply()
     }
 
     suspend fun setName(name: String): String {
@@ -279,6 +457,10 @@ class Intercom(
             return
         }
         if (p.optString("to") != myId) return // mensagem para outro piloto no mesmo canal
+        if (event == "recado") {
+            scope.launch { fetchRecados() }
+            return
+        }
         val from = p.optString("from")
         val call = p.optString("call")
         when (event) {

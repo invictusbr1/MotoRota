@@ -172,8 +172,10 @@ class PhoneActions(private val ctx: Context) {
      * em segundo plano. Se o Spotify estiver fechado, abre, dá o play e volta para o MotoRota sozinho.
      */
     private fun playSearch(q: String): String {
-        players().firstOrNull { canSearch(it) }?.let { c ->
+        val before = players()
+        before.firstOrNull { canSearch(it) }?.let { c ->
             c.transportControls.playFromSearch(q, android.os.Bundle())
+            confirmPlaying(q, 0)
             return "Tocando $q."
         }
         val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
@@ -181,17 +183,38 @@ class PhoneActions(private val ctx: Context) {
             .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
         if (isInstalled(SPOTIFY)) i.setPackage(SPOTIFY)
         if (!start(i)) return "Não achei um app de música que aceite pedido por voz."
-        // dá tempo do Spotify abrir e começar; se ele abriu sem tocar, manda o play pela sessão
+        // o Spotify frio às vezes abre sem tocar: vai conferindo e insiste no play pela sessão dele
+        confirmPlaying(q, 1)
+        returnToApp(6000)
+        return "Tocando $q."
+    }
+
+    /** Confere de 1,5 em 1,5 s se começou a tocar; senão manda de novo (pela sessão ou tecla de play). */
+    private fun confirmPlaying(q: String, attempt: Int) {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val list = players()
+            val c = list.firstOrNull { it.packageName == SPOTIFY } ?: list.firstOrNull()
+            val st = c?.playbackState?.state
+            if (st == android.media.session.PlaybackState.STATE_PLAYING ||
+                st == android.media.session.PlaybackState.STATE_BUFFERING
+            ) return@postDelayed
+            if (attempt >= 5) {
+                com.motorota.data.Http.report(
+                    "jarvis-musica",
+                    "nao tocou \"$q\" notif=${notificationsAllowed()} sessoes=${list.map { "${it.packageName}:${it.playbackState?.state}:${it.playbackState?.actions}" }}",
+                )
+                return@postDelayed
+            }
             runCatching {
-                val c = players().firstOrNull { it.packageName == SPOTIFY } ?: players().firstOrNull()
-                if (c != null && c.playbackState?.state != android.media.session.PlaybackState.STATE_PLAYING) {
-                    if (canSearch(c)) c.transportControls.playFromSearch(q, android.os.Bundle()) else c.transportControls.play()
+                when {
+                    c != null && canSearch(c) -> c.transportControls.playFromSearch(q, android.os.Bundle())
+                    c != null -> c.transportControls.play()
+                    attempt >= 3 -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                    else -> {}
                 }
             }
-        }, 3500)
-        returnToApp(4500)
-        return "Tocando $q."
+            confirmPlaying(q, attempt + 1)
+        }, 1500)
     }
 
     fun volume(action: String, percent: Int? = null): String {
