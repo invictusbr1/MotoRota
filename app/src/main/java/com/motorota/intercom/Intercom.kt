@@ -26,8 +26,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.Normalizer
 import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
@@ -527,28 +525,15 @@ class Intercom(
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").trim()
 
     private suspend fun rpc(fn: String, body: JSONObject): Pair<Int, String>? = withContext(Dispatchers.IO) {
-        try {
-            val conn = URL("$SUPABASE_URL/rest/v1/rpc/$fn").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 10_000
-            conn.readTimeout = 10_000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("apikey", SUPABASE_KEY)
-            conn.setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
-            try {
-                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-                val code = conn.responseCode
-                val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                code to text
-            } finally {
-                conn.disconnect()
-            }
-        } catch (e: Exception) {
-            Log.w("MotoRota", "Intercom: central: $e")
+        val r = com.motorota.data.Http.request(
+            "$SUPABASE_URL/rest/v1/rpc/$fn", "POST",
+            mapOf("apikey" to SUPABASE_KEY, "Authorization" to "Bearer $SUPABASE_KEY"),
+            body.toString(),
+        )
+        if (r.code < 0) {
+            Log.w("MotoRota", "Intercom: central: ${r.reason()}")
             null
-        }
+        } else r.code to r.text
     }
 
     fun release() {

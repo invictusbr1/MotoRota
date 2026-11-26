@@ -512,6 +512,8 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
     var friendNick by remember { mutableStateOf("") }
     var icInfo by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var testReport by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DialogBg,
@@ -712,6 +714,21 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                             onClick = { Keys.save(tomtomText, geminiText); keysSaved = true },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (keysSaved) "Chaves salvas ✓" else "Salvar chaves") }
+                        OutlinedButton(
+                            onClick = {
+                                testing = true
+                                testReport = "Testando…"
+                                scope.launch {
+                                    testReport = vm.jarvis.diagnose()
+                                    testing = false
+                                }
+                            },
+                            enabled = !testing,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Testar o Jarvis (conexão com o Gemini)") }
+                        if (testReport.isNotBlank()) {
+                            Text(testReport, color = Color(0xFF93C5FD), fontSize = 12.sp, lineHeight = 16.sp)
+                        }
                     }
                 }
 

@@ -5,8 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /** Uma ação do app que a IA pode chamar (ex.: traçar rota, contar radares). */
 class Tool(
@@ -154,6 +152,43 @@ class Brain(private val tools: List<Tool>) {
         throw BrainException("Não consegui falar com o Gemini ($lastErr).")
     }
 
+    /**
+     * Teste rápido (botão nos Ajustes): tenta uma pergunta curtinha em cada serviço/modelo
+     * e devolve um relatório do que o Google respondeu.
+     */
+    suspend fun diagnose(key: String): String = withContext(Dispatchers.IO) {
+        if (key.isBlank()) return@withContext "Sem chave do Gemini."
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", "Responda só: ok")))))
+            .put("generationConfig", JSONObject().put("maxOutputTokens", 50))
+            .toString()
+        val lines = ArrayList<String>()
+        lines.add("Chave: ${key.take(4)}… (${key.length} letras)")
+        for (vertex in listOf(key.startsWith("AQ."), !key.startsWith("AQ."))) {
+            val nome = if (vertex) "Vertex AI" else "AI Studio"
+            for (model in MODELS.take(4)) {
+                val t0 = System.currentTimeMillis()
+                val (code, text) = try {
+                    post(endpoint(vertex, model, key), if (vertex) null else key, body)
+                } catch (e: Exception) {
+                    -1 to (e.javaClass.simpleName + ": " + (e.message ?: ""))
+                }
+                val ms = System.currentTimeMillis() - t0
+                val msg = runCatching { JSONObject(text).optJSONObject("error")?.optString("message") }.getOrNull()
+                    ?.takeIf { it.isNotBlank() } ?: text.take(90)
+                if (code in 200..299) {
+                    useVertex = vertex
+                    workingModel = model
+                    lines.add("✓ $nome · $model funcionou (${ms / 1000.0}s)")
+                    return@withContext lines.joinToString("\n")
+                }
+                lines.add("✗ $nome · $model: ${if (code < 0) "sem resposta" else "erro $code"} (${ms / 1000.0}s) ${msg.take(90)}")
+                if (code == 401 || code == 403) break // chave não serve neste serviço: não adianta outro modelo
+            }
+        }
+        lines.joinToString("\n")
+    }
+
     private fun endpoint(vertex: Boolean, model: String, key: String): String =
         if (vertex) {
             "https://aiplatform.googleapis.com/v1/publishers/google/models/$model:generateContent?key=" +
@@ -177,22 +212,11 @@ class Brain(private val tools: List<Tool>) {
     }
 
     private fun post(url: String, key: String?, body: String): Pair<Int, String> {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 30_000
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        if (key != null) conn.setRequestProperty("x-goog-api-key", key)
-        try {
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            return code to text
-        } finally {
-            conn.disconnect()
-        }
+        val headers = if (key != null) mapOf("x-goog-api-key" to key) else emptyMap()
+        val r = com.motorota.data.Http.request(url, "POST", headers, body, readTimeoutMs = 20_000)
+        // sem resposta nenhuma (sem rede, DNS, tempo esgotado): não adianta tentar outros modelos
+        if (r.code < 0) throw BrainException("Não consegui falar com o Google: ${r.reason()}.")
+        return r.code to r.text
     }
 
     companion object {

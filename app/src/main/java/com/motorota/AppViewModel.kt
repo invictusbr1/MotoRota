@@ -796,8 +796,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 searchResults = Geocoder.search(q, myLocation)
                 if (searchResults.isEmpty()) message = "Nada encontrado para \"$q\"."
-            } catch (_: Exception) {
-                message = "Sem internet para buscar. Toque e segure no mapa para marcar o destino."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = if (!hasInternet()) "Sem internet para buscar. Toque e segure no mapa para marcar o destino."
+                else "A busca falhou (${e.message}). Tente de novo ou toque e segure no mapa."
             } finally {
                 searching = false
             }

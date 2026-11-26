@@ -14,6 +14,7 @@ import com.motorota.data.Keys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 enum class JarvisStatus { OFF, PREPARING, WAITING, LISTENING, THINKING, SPEAKING }
@@ -123,6 +124,9 @@ class Jarvis(
         resumeWake()
     }
 
+    /** Relatório do botão "Testar o Jarvis" nos Ajustes. */
+    suspend fun diagnose(): String = brain.diagnose(Keys.gemini)
+
     fun dismissReply() {
         reply = ""
         heard = ""
@@ -183,13 +187,19 @@ class Jarvis(
                     }
                     status = JarvisStatus.THINKING
                     val answer = try {
-                        brain.ask(key, systemPrompt(), text)
+                        // roda à parte: se o Google travar, o Jarvis desiste em 35 s em vez de ficar "pensando" para sempre
+                        val prompt = systemPrompt()
+                        val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { brain.ask(key, prompt, text) }
+                        kotlinx.coroutines.withTimeoutOrNull(35_000) { job.await() } ?: run {
+                            job.cancel()
+                            "O Gemini demorou demais para responder. Teste em Ajustes, Testar o Jarvis."
+                        }
                     } catch (e: BrainException) {
                         e.message ?: "Deu erro."
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        "Estou sem internet agora."
+                        "Deu um erro inesperado: ${e.message ?: e.javaClass.simpleName}."
                     }
                     reply = clean(answer)
                     replyVersion++

@@ -8,8 +8,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
 import java.text.Normalizer
 
@@ -35,7 +33,13 @@ object Geocoder {
             val ph = async { runSafe { photon(q, near) } }
             val a = tt.await()
             val b = ph.await()
-            if (a.isFailure && b.isFailure) throw (b.exceptionOrNull() ?: Exception("sem internet"))
+            if (a.isFailure && b.isFailure) {
+                val why = listOfNotNull(
+                    a.exceptionOrNull()?.let { "TomTom: ${it.message}" },
+                    b.exceptionOrNull()?.let { "mapa aberto: ${it.message}" },
+                ).joinToString("; ")
+                throw Exception(why)
+            }
             merge(a.getOrDefault(emptyList()) + b.getOrDefault(emptyList()))
                 .map { withDistance(it, near) }
                 .take(12)
@@ -100,16 +104,9 @@ object Geocoder {
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").trim()
 
     private fun get(url: String): String {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 9_000
-        conn.readTimeout = 9_000
-        conn.setRequestProperty("User-Agent", "MotoRota-Android/0.2")
-        try {
-            if (conn.responseCode !in 200..299) throw Exception("HTTP ${conn.responseCode}")
-            return conn.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            conn.disconnect()
-        }
+        val r = Http.request(url, readTimeoutMs = 10_000)
+        if (!r.ok) throw Exception(r.reason())
+        return r.text
     }
 
     /** TomTom Fuzzy Search: estabelecimentos (POI), endereços, ruas e bairros. */
@@ -157,7 +154,15 @@ object Geocoder {
         val bias = near?.let { "&lat=${it.lat}&lon=${it.lon}&zoom=12&location_bias_scale=0.2" } ?: ""
         // limita a America do Sul (bbox: minLon,minLat,maxLon,maxLat)
         val url = "https://photon.komoot.io/api/?q=$enc&limit=12$bias&bbox=-82,-56,-34,13"
-        val feats = JSONObject(get(url)).getJSONArray("features")
+        val json = try {
+            get(url)
+        } catch (e: Exception) {
+            // servidor recusou algum parâmetro: tenta o pedido mais simples (como antes)
+            if (e.message?.contains("400") == true) {
+                get("https://photon.komoot.io/api/?q=$enc&limit=12" + (near?.let { "&lat=${it.lat}&lon=${it.lon}" } ?: ""))
+            } else throw e
+        }
+        val feats = JSONObject(json).getJSONArray("features")
         val out = ArrayList<Place>()
         for (i in 0 until feats.length()) {
             val f = feats.getJSONObject(i)
