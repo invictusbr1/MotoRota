@@ -220,7 +220,10 @@ class Jarvis(
                     val answer = try {
                         // roda à parte: se o Google travar, o Jarvis desiste em vez de ficar "pensando" para sempre
                         val prompt = systemPrompt()
-                        val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { think(prompt, text) }
+                        // na continuação (sem dizer "Jarvis") a IA decide se a frase era mesmo para ele
+                        // ou se o piloto estava conversando com a garupa / outra pessoa
+                        val asked = if (rounds > 1) "[seguimento] $text" else text
+                        val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { think(prompt, asked) }
                         kotlinx.coroutines.withTimeoutOrNull(55_000) { job.await() } ?: run {
                             job.cancel()
                             "O Gemini demorou demais para responder. Teste em Ajustes, Testar o Jarvis."
@@ -231,6 +234,12 @@ class Jarvis(
                         throw e
                     } catch (e: Exception) {
                         "Deu um erro inesperado: ${e.message ?: e.javaClass.simpleName}."
+                    }
+                    if (answer.contains("IGNORAR")) {
+                        // não era com ele: sai quietinho, sem interromper a conversa
+                        heard = ""
+                        endTone()
+                        break
                     }
                     reply = clean(answer)
                     replyVersion++

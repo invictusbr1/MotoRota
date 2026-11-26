@@ -1085,10 +1085,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** permissões que o Jarvis precisa pedir agora (a tela mostra o pedido) */
     var permissionAsk by mutableStateOf<List<String>?>(null)
     /** ler em voz alta as mensagens que chegam (WhatsApp/Telegram/SMS) */
-    var readMessagesAloud by mutableStateOf(prefs.getBoolean("ler_mensagens", true)); private set
+    // desligado por padrão: o Jarvis só fala das mensagens quando o piloto pergunta
+    var readMessagesAloud by mutableStateOf(prefs.getBoolean("avisar_mensagens", false)); private set
     fun toggleReadMessages() {
         readMessagesAloud = !readMessagesAloud
-        prefs.edit().putBoolean("ler_mensagens", readMessagesAloud).apply()
+        prefs.edit().putBoolean("avisar_mensagens", readMessagesAloud).apply()
     }
 
     private suspend fun phoneAction(block: () -> String): String = withContext(Dispatchers.Main) {
@@ -1107,7 +1108,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (!readMessagesAloud) return@launch
                 if (jarvisDelegate.isInitialized() && jarvis.busyNow) return@launch
                 if (intercomDelegate.isInitialized() && intercom.busy) return@launch
-                speakAndWait("Mensagem de ${m.from} no ${m.app}: ${m.text.take(200)}")
+                // só avisa de quem é (o conteúdo, só se o piloto pedir)
+                speakAndWait("Mensagem de ${m.from} no ${m.app}.")
             }
         }
     }
@@ -1318,6 +1320,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             - Fora isso, converse normalmente sobre qualquer assunto, como uma IA comum, com bom humor e sem enrolar.
             - Pense na segurança: nunca incentive o piloto a mexer no celular enquanto pilota.
             - Celular: você pode abrir aplicativos, ligar para contatos, mandar WhatsApp, ler mensagens novas e controlar música e volume pelas funções. Contas e cálculos você faz sozinho, de cabeça. "Liga pra X" = ligação telefônica comum (ligar_para_contato); "chama/entra em contato com X" = intercomunicador do app (chamar_piloto) se X for um amigo do intercomunicador.
+            - Mensagens: se perguntarem "chegou mensagem?" ou "de quem é a mensagem?", diga só de quem chegou; leia o conteúdo apenas se o piloto pedir ("lê a da minha mãe").
+            - Mensagens marcadas [seguimento] foram captadas pelo microfone sem o piloto dizer "Jarvis", logo depois de você responder. O piloto costuma estar conversando com a garupa ou com outro piloto pelo intercomunicador. Se a frase não for claramente um pedido ou uma continuação da conversa com você, responda exatamente: [IGNORAR] (nada mais). Na dúvida, [IGNORAR].
             - Intercomunicador: "entra em contato com X", "chama o X", "liga pro X" = chamar_piloto. Durante a chamada, "desliga"/"encerra" = encerrar_chamada. Se estiver tocando, "atende"/"recusa" = atender_chamada / recusar_chamada.
             Situação agora: $quando. Localização: $onde. Velocidade: $speedKmh km/h. Estado: $rota.
             Intercomunicador: ${intercomStatus()}
@@ -1360,9 +1364,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             listOf("contato", "mensagem"),
         ) { a -> phoneAction { phone.whatsapp(a.optString("contato"), a.optString("mensagem")) } },
         Tool(
-            "ler_mensagens",
-            "Lê em voz alta as mensagens novas que chegaram (WhatsApp, Telegram, SMS).",
-        ) { _ -> phoneAction { phone.readMessages() } },
+            "mensagens_recebidas",
+            "Mensagens novas que chegaram (WhatsApp, Telegram, SMS). Por padrão devolve só DE QUEM são; " +
+                "use ler_conteudo=true quando o piloto pedir para ler o que dizem (pode filtrar por contato).",
+            mapOf(
+                "ler_conteudo" to ("BOOLEAN" to "true para ler o texto das mensagens"),
+                "contato" to ("STRING" to "só as mensagens desta pessoa (opcional)"),
+            ),
+        ) { a ->
+            phoneAction {
+                phone.readMessages(a.optBoolean("ler_conteudo", false), a.optString("contato").takeIf { it.isNotBlank() })
+            }
+        },
         Tool(
             "musica",
             "Controla a música do celular (Spotify ou outro): tocar, pausar, próxima, anterior; ou tocar uma música/artista/playlist pelo nome.",

@@ -169,15 +169,25 @@ class PhoneActions(private val ctx: Context) {
         return flat.contains(ComponentName(ctx, MessageListener::class.java).flattenToString())
     }
 
-    fun readMessages(): String {
+    fun readMessages(content: Boolean, contact: String?): String {
         if (!notificationsAllowed()) {
             openNotificationSettings()
-            return "Para eu ler suas mensagens, ative o MotoRota em Acesso a notificações. Abri a tela para você."
+            return "Para eu ver suas mensagens, ative o MotoRota em Acesso a notificações. Abri a tela para você."
         }
-        val list = MessageListener.unread()
-        if (list.isEmpty()) return "Nenhuma mensagem nova."
-        MessageListener.markRead()
-        return list.takeLast(6).joinToString(" ") { "${it.app}, ${it.from}: ${it.text}." }
+        var list = MessageListener.unread()
+        if (contact != null) {
+            val q = norm(contact)
+            list = list.filter { norm(it.from).contains(q) || q.contains(norm(it.from)) }
+        }
+        if (list.isEmpty()) return if (contact != null) "Nenhuma mensagem nova de $contact." else "Nenhuma mensagem nova."
+        if (!content) {
+            val who = list.groupBy { it.from }.map { (from, msgs) ->
+                if (msgs.size > 1) "$from (${msgs.size}, ${msgs.first().app})" else "$from (${msgs.first().app})"
+            }
+            return "Mensagens novas de: " + who.joinToString(", ") + "."
+        }
+        MessageListener.markRead(list)
+        return list.takeLast(6).joinToString(" ") { "${it.from} no ${it.app}: ${it.text}." }
     }
 
     fun openNotificationSettings() {

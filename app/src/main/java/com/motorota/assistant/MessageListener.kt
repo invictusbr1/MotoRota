@@ -48,5 +48,7 @@ class MessageListener : NotificationListenerService() {
         fun unread(): List<Msg> = synchronized(list) { list.filter { !it.read } }
 
         fun markRead() = synchronized(list) { list.forEach { it.read = true } }
+
+        fun markRead(which: List<Msg>) = synchronized(list) { which.forEach { it.read = true } }
     }
 }

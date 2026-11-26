@@ -589,7 +589,7 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                             lineHeight = 17.sp,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Ler em voz alta as mensagens que chegam", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Text("Avisar quando chegar mensagem (só diz de quem)", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
                             Switch(checked = vm.readMessagesAloud, onCheckedChange = { vm.toggleReadMessages() })
                         }
                         Text(
