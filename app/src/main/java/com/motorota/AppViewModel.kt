@@ -233,21 +233,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (destination != null && !navigating) recalc(fit = false)
     }
 
+    /**
+     * O CAMINHO sempre sai do motor de segurança (BRouter + áreas/zonas/trechos de risco).
+     * Com internet, a TomTom só redesenha esse mesmo caminho no mapa atualizado dela, e o
+     * desenho é descartado se sair do caminho seguro.
+     */
     private suspend fun computeRoute(pts: List<GeoPoint>, m: Mode): RouteResult {
-        if (freshMapOn && com.motorota.routing.TomTomRouter.available) {
-            try {
-                return com.motorota.routing.TomTomRouter.route(pts, m, blocked(), known(), zones())
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (!engine.hasAnyMap()) throw RouteException(
-                    "Sem conexão com o mapa online (${e.message}) e sem mapa offline baixado.",
-                )
-                val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
-                return r.copy(note = r.note ?: "📴 Sem o mapa online agora: rota pelo mapa offline (pode faltar obra recente).")
+        val tt = com.motorota.routing.TomTomRouter
+        if (engine.hasAnyMap()) {
+            val base = engine.route(pts, m, blocked(), known(), corridors(), zones())
+            if (freshMapOn && tt.available) {
+                try {
+                    tt.refine(pts, base, known(), zones())?.let { return it }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                }
             }
+            return base
         }
-        return engine.route(pts, m, blocked(), known(), corridors(), zones())
+        if (tt.available) {
+            val r = tt.route(pts, m, blocked(), known(), zones())
+            return r.copy(
+                note = "⚠️ Sem o mapa offline baixado: esta rota NÃO passou pelo motor de segurança completo " +
+                    "(desvio de comunidades e zonas de risco). Baixe o mapa do Brasil no menu.",
+            )
+        }
+        throw RouteException("Baixe o mapa offline no menu para calcular rotas.")
     }
 
     fun known(): List<KnownRisk> = if (knownRisksOn) KnownRisks.all else emptyList()

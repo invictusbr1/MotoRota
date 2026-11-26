@@ -53,6 +53,118 @@ object TomTomRouter {
         parse(mode, res.text)
     }
 
+    /**
+     * Segurança primeiro: o caminho vem do motor de segurança (BRouter, que desvia de favelas,
+     * zonas urbanas densas e trechos de risco). Aqui a TomTom só "redesenha" ESSE MESMO caminho no
+     * mapa novo dela (pega rotatória nova, obra, mão invertida). Se o desenho dela sair do caminho
+     * seguro, ou passar mais por área de risco, é descartado e fica o do BRouter.
+     */
+    suspend fun refine(
+        points: List<GeoPoint>,
+        base: RouteResult,
+        known: List<KnownRisk>,
+        zones: List<UrbanZone>,
+    ): RouteResult? = withContext(Dispatchers.IO) {
+        if (base.points.size < 2) return@withContext null
+        val total = base.cumDist.last()
+        val step = maxOf(250.0, total / 180)
+        val sup = ArrayList<GeoPoint>()
+        var next = 0.0
+        for (i in base.points.indices) {
+            if (base.cumDist[i] >= next) { sup.add(base.points[i]); next = base.cumDist[i] + step }
+        }
+        if (sup.last() != base.points.last()) sup.add(base.points.last())
+        val body = JSONObject().put(
+            "supportingPoints",
+            JSONArray().apply { sup.forEach { put(JSONObject().put("latitude", it.lat).put("longitude", it.lon)) } },
+        ).toString()
+        val locs = points.joinToString(":") { String.format(Locale.US, "%.6f,%.6f", it.lat, it.lon) }
+        fun req(travel: String, sections: Boolean) = Http.request(
+            "https://api.tomtom.com/routing/1/calculateRoute/$locs/json?key=${Keys.tomtom}" +
+                "&travelMode=$travel&routeType=fastest&traffic=true&instructionsType=coded&language=pt-BR" +
+                "&routeRepresentation=polyline&computeTravelTimeFor=none" +
+                (if (sections) "&sectionType=speedLimit&sectionType=motorway&sectionType=unpaved" else ""),
+            "POST", body = body, readTimeoutMs = 20_000,
+        )
+        var res = req("motorcycle", true)
+        if (res.code == 400) res = req("car", false)
+        if (!res.ok) {
+            Http.report("rota-tomtom", "refino HTTP ${res.code} ${res.reason()} ${res.text.take(300)}")
+            return@withContext null
+        }
+        val r = parse(base.mode, res.text)
+        val why = rejectReason(base, r, known, zones)
+        if (why != null) {
+            Http.report("rota-tomtom", "refino descartado (${base.mode.label}): $why")
+            return@withContext null
+        }
+        // mantém as estatísticas de piso do motor seguro (paralelepípedo etc.) quando a TomTom não informa
+        r.copy(badPavingM = base.badPavingM, unpavedM = maxOf(r.unpavedM, base.unpavedM), note = base.note)
+    }
+
+    /** null = o desenho novo segue o caminho seguro; senão, o motivo de descartar. */
+    private fun rejectReason(base: RouteResult, r: RouteResult, known: List<KnownRisk>, zones: List<UrbanZone>): String? {
+        val lb = base.cumDist.last(); val lr = r.cumDist.last()
+        if (lr > lb * 1.12 + 500 || lr < lb * 0.85) return "distância ${lr.toInt()} m x ${lb.toInt()} m"
+        // amostra o novo traçado a cada ~150 m e mede a distância até o caminho seguro
+        var far = 0; var n = 0; var worst = 0.0
+        var hint = 0
+        var next = 0.0
+        for (i in r.points.indices) {
+            if (r.cumDist[i] < next) continue
+            next = r.cumDist[i] + 150
+            val (d, at) = nearest(base.points, r.points[i], hint)
+            hint = at
+            n++
+            if (d > 300) far++
+            if (d > worst) worst = d
+        }
+        if (worst > 1200) return "saiu ${worst.toInt()} m do caminho seguro"
+        if (n > 0 && far * 100 / n > 3) return "$far de $n pontos fora do caminho seguro"
+        val exp0 = exposure(base, known, zones); val exp1 = exposure(r, known, zones)
+        if (exp1 > exp0 + 300) return "mais ${(exp1 - exp0).toInt()} m dentro de área de risco"
+        return null
+    }
+
+    /** distância até o ponto mais próximo do caminho, procurando perto do último achado (é tudo na mesma ordem) */
+    private fun nearest(path: List<GeoPoint>, p: GeoPoint, hint: Int): Pair<Double, Int> {
+        var best = Double.MAX_VALUE; var at = hint
+        val from = (hint - 400).coerceAtLeast(0); val to = (hint + 1500).coerceAtMost(path.size - 1)
+        fun scan(a: Int, b: Int) {
+            for (j in a until b) {
+                val d = segDist(p, path[j], path[j + 1])
+                if (d < best) { best = d; at = j }
+            }
+        }
+        scan(from, to)
+        if (best > 300) scan(0, path.size - 1) // perdeu a referência: procura no caminho todo
+        return best to at
+    }
+
+    private fun segDist(p: GeoPoint, a: GeoPoint, b: GeoPoint): Double {
+        val kx = 111_320 * cos(Math.toRadians(p.lat))
+        val ax = (a.lon - p.lon) * kx; val ay = (a.lat - p.lat) * 110_540
+        val bx = (b.lon - p.lon) * kx; val by = (b.lat - p.lat) * 110_540
+        val dx = bx - ax; val dy = by - ay
+        val l2 = dx * dx + dy * dy
+        val t = if (l2 > 0) (-(ax * dx + ay * dy) / l2).coerceIn(0.0, 1.0) else 0.0
+        val x = ax + t * dx; val y = ay + t * dy
+        return kotlin.math.sqrt(x * x + y * y)
+    }
+
+    /** metros rodados dentro de áreas críticas conhecidas e zonas urbanas densas */
+    fun exposure(r: RouteResult, known: List<KnownRisk>, zones: List<UrbanZone>): Double {
+        val circles = known.filter { it.avoid }.map { it.point to it.radiusM.toDouble() } +
+            zones.filter { it.dense }.map { it.point to it.radiusM * 0.6 }
+        if (circles.isEmpty()) return 0.0
+        var m = 0.0
+        for (i in 1 until r.points.size) {
+            val p = r.points[i]
+            if (circles.any { (c, rad) -> p.distanceTo(c) < rad }) m += r.cumDist[i] - r.cumDist[i - 1]
+        }
+        return m
+    }
+
     private fun call(
         points: List<GeoPoint>,
         travel: String,
