@@ -433,7 +433,7 @@ private fun PlanningOverlay(
                             Text("Mapas e passeios salvos são mantidos.", color = Color(0xFFBFDBFE), fontSize = 12.sp)
                         }
                         Button(
-                            onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(up.apkUrl))) },
+                            onClick = { vm.installUpdate(up.apkUrl) },
                             shape = RoundedCornerShape(10.dp),
                         ) { Text("Atualizar") }
                         IconButton(onClick = { vm.update = null }) {

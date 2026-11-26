@@ -592,6 +592,19 @@ fun SettingsDialog(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, o
                             Text("Ler em voz alta as mensagens que chegam", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
                             Switch(checked = vm.readMessagesAloud, onCheckedChange = { vm.toggleReadMessages() })
                         }
+                        Text(
+                            "Se o Android disser \"Acesso negado\" / \"configuração restrita\", toque aqui primeiro: o MotoRota se reinstala " +
+                                "pelo instalador oficial e o bloqueio some (seus dados continuam).",
+                            color = TextDim,
+                            fontSize = 12.sp,
+                        )
+                        Button(
+                            onClick = { vm.installUpdate(null) },
+                            enabled = vm.installProgress == null,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(vm.installProgress?.let { "Baixando… $it%" } ?: "Liberar bloqueio (reinstalar pelo MotoRota)")
+                        }
                         val notifOk = vm.phone.notificationsAllowed()
                         OutlinedButton(onClick = { vm.phone.openNotificationSettings() }, modifier = Modifier.fillMaxWidth()) {
                             Text(if (notifOk) "Leitura de mensagens: ativada ✓" else "1. Ativar leitura de mensagens")

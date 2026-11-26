@@ -26,6 +26,7 @@ import android.media.AudioAttributes
 import com.motorota.data.Corridor
 import com.motorota.data.Keys
 import com.motorota.data.Http
+import com.motorota.data.SelfInstaller
 import com.motorota.data.Corridors
 import com.motorota.data.Geocoder
 import com.motorota.data.Hazard
@@ -68,6 +69,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1043,6 +1045,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     val jarvis: Jarvis by jarvisDelegate
 
+    // ---------- Atualização instalada pelo próprio app (libera Acessibilidade/notificações) ----------
+    /** progresso do download da atualização (0-100) ou null */
+    var installProgress by mutableStateOf<Int?>(null); private set
+
+    fun installUpdate(apkUrl: String?) {
+        val ctx = getApplication<Application>()
+        if (!SelfInstaller.ensureAllowed(ctx)) {
+            message = "Permita \"Instalar apps desconhecidos\" para o MotoRota e toque de novo."
+            return
+        }
+        if (installProgress != null) return
+        viewModelScope.launch {
+            installProgress = 0
+            val url = apkUrl ?: withContext(Dispatchers.IO) { latestApkUrl() }
+            if (url == null) {
+                message = "Não achei a versão para baixar. Confira a internet."
+                installProgress = null
+                return@launch
+            }
+            message = SelfInstaller.install(ctx, url) { p -> viewModelScope.launch { installProgress = p } }
+            installProgress = null
+        }
+    }
+
+    private fun latestApkUrl(): String? {
+        val r = Http.request("https://api.github.com/repos/${com.motorota.BuildConfig.GITHUB_REPO}/releases/latest")
+        if (!r.ok) return null
+        val assets = runCatching { JSONObject(r.text).optJSONArray("assets") }.getOrNull() ?: return null
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            if (a.optString("name").endsWith(".apk")) return a.optString("browser_download_url")
+        }
+        return null
+    }
+
     // ---------- Acesso aos aplicativos ----------
     val phone by lazy { PhoneActions(getApplication()) }
     /** permissões que o Jarvis precisa pedir agora (a tela mostra o pedido) */
@@ -1130,13 +1167,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Fala e só volta quando terminar (o Jarvis espera para voltar a ouvir). Ignora o "mudo" dos avisos. */
     /** voz do Jarvis: nome de uma voz do Google (Gemini) ou "celular" (voz do próprio Android) */
     // padrão: voz offline Piper "faber" (grátis e sem limite). Quem já tinha escolhido outra, mantém.
-    var jarvisVoice by mutableStateOf(prefs.getString("jarvis_voz2", null) ?: "piper:faber"); private set
+    // padrão: voz do Google (Charon); quando a cota grátis acaba, entra a voz offline ajustada (não a robótica)
+    var jarvisVoice by mutableStateOf(prefs.getString("jarvis_voz3", null) ?: "Charon"); private set
     /** progresso do download da voz offline (0-100), ou null se não está baixando */
     var voiceDownload by mutableStateOf<Int?>(null); private set
 
     fun setJarvisVoiceName(v: String) {
         jarvisVoice = v
-        prefs.edit().putString("jarvis_voz2", v).apply()
+        prefs.edit().putString("jarvis_voz3", v).apply()
         if (v.startsWith("piper:")) ensurePiper(v.removePrefix("piper:"))
     }
 
@@ -1189,24 +1227,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Fala com a voz offline frase por frase: enquanto uma frase toca, a próxima já está sendo gerada
+     * (começa a falar mais rápido) e há uma pausa natural entre elas. Um pouco mais lenta e mais grave.
+     */
+    private suspend fun speakPiper(id: String, text: String, inCall: Boolean): Boolean {
+        val ctx = getApplication<Application>()
+        if (!PiperVoice.ready(ctx, id)) {
+            ensurePiper(id)
+            return false
+        }
+        val parts = text.split(Regex("(?<=[.!?…;:])\\s+")).map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return false
+        tts?.stop()
+        lastUrgentSpeechMs = SystemClock.elapsedRealtime()
+        return kotlinx.coroutines.coroutineScope {
+            var next = async { PiperVoice.synth(ctx, id, parts[0], speed = 0.9f) }
+            var spoke = false
+            for (i in parts.indices) {
+                val audio = next.await()
+                if (i + 1 < parts.size) {
+                    val t = parts[i + 1]
+                    next = async { PiperVoice.synth(ctx, id, t, speed = 0.9f) }
+                }
+                if (audio != null) {
+                    runCatching { JarvisVoice.play(audio, inCall, rateFactor = 0.93f) }
+                    spoke = true
+                    if (i + 1 < parts.size) delay(260)
+                }
+            }
+            spoke
+        }
+    }
+
     suspend fun speakAndWait(text: String) {
         if (text.isBlank()) return
         val inCallNow = intercomDelegate.isInitialized() && intercom.inCall
         // Voz offline (Piper): grátis, sem limite e sem internet
         if (jarvisVoice.startsWith("piper:")) {
-            val id = jarvisVoice.removePrefix("piper:")
-            val ctx = getApplication<Application>()
-            if (PiperVoice.ready(ctx, id)) {
-                val audio = PiperVoice.synth(ctx, id, text)
-                if (audio != null) {
-                    tts?.stop()
-                    lastUrgentSpeechMs = SystemClock.elapsedRealtime()
-                    runCatching { JarvisVoice.play(audio, inCallNow) }
-                    return
-                }
-            } else {
-                ensurePiper(id) // enquanto baixa, fala com a voz do celular
-            }
+            if (speakPiper(jarvisVoice.removePrefix("piper:"), text, inCallNow)) return
         }
         // Voz natural do Google; se não der (sem internet, limite), cai na voz do celular
         if (!jarvisVoice.startsWith("piper:") && jarvisVoice != "celular" && Keys.gemini.isNotBlank()) {
@@ -1218,10 +1277,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (audio != null) {
                 tts?.stop()
                 lastUrgentSpeechMs = SystemClock.elapsedRealtime()
-                val inCall = intercomDelegate.isInitialized() && intercom.inCall
-                runCatching { JarvisVoice.play(audio, inCall) }
+                runCatching { JarvisVoice.play(audio, inCallNow) }
                 return
             }
+            // sem a voz do Google (limite/sem internet): voz offline ajustada, que é bem melhor que a do celular
+            if (speakPiper("faber", text, inCallNow)) return
         }
         val t = tts ?: return
         if (!ttsReady || text.isBlank()) return
@@ -1249,7 +1309,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Pense como um motociclista experiente de estrada: além de responder, antecipe o que importa na viagem (combustível, descanso, clima, pôr do sol, trechos perigosos, radares) e dê a recomendação prática, como um parceiro de viagem faria. Ex.: "Sua autonomia dá uns 100 km e faltam 200; eu abasteceria no posto daqui a 60 km, descansava 15 minutos e seguia."
             Para combustível e paradas use a função planejar_abastecimento_e_paradas; nunca chute autonomia.
             Regras:
-            - Responda sempre em português do Brasil, de forma natural e curta (1 a 3 frases), porque a resposta é falada no capacete.
+            - Responda sempre em português do Brasil, como uma pessoa conversando: natural, calorosa e bem explicada, em 2 a 4 frases (é falado no capacete, então nada de textão). Use vírgulas e pontos para a fala ter pausas.
             - Nada de markdown, listas, asteriscos ou emojis. Fale números de um jeito natural (ex.: "dois radares, o primeiro a 800 metros").
             - Para qualquer coisa do app (traçar rota, parada, radares, quanto falta, chegada, trânsito, clima, procurar lugares, onde estou, parar navegação, voz dos avisos) USE AS FUNÇÕES. Nunca invente radares, distâncias ou tempos: use só o que as funções devolverem.
             - "Programa a rota pra X", "me leva pra X", "vamos pra X" = navegar_para.

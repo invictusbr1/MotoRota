@@ -118,7 +118,9 @@ object JarvisVoice {
     }
 
     /** Toca e espera terminar. voiceCall = durante chamada do intercomunicador (sai pelo canal da ligação). */
-    suspend fun play(a: Audio, voiceCall: Boolean) {
+    /** rateFactor < 1 deixa a voz mais grave e um pouco mais lenta */
+    suspend fun play(a: Audio, voiceCall: Boolean, rateFactor: Float = 1f) {
+        val rate = (a.rate * rateFactor).toInt()
         val track = withContext(Dispatchers.IO) {
             AudioTrack.Builder()
                 .setAudioAttributes(
@@ -129,7 +131,7 @@ object JarvisVoice {
                 )
                 .setAudioFormat(
                     AudioFormat.Builder()
-                        .setSampleRate(a.rate)
+                        .setSampleRate(rate)
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                         .build(),
@@ -141,7 +143,7 @@ object JarvisVoice {
         }
         try {
             track.play()
-            val ms = a.pcm.size / 2 * 1000L / a.rate
+            val ms = a.pcm.size / 2 * 1000L / rate
             delay(ms + 150)
         } finally {
             runCatching { track.stop() }
