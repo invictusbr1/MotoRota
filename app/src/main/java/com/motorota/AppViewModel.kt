@@ -265,7 +265,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("boas_vindas_ok", true).apply()
     }
 
-    fun setRiderName(name: String) {
+    fun saveRiderName(name: String) {
         riderName = name.trim()
         prefs.edit().putString("nome_piloto", riderName).apply()
     }

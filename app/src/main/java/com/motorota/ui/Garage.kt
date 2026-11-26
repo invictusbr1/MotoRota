@@ -160,7 +160,7 @@ fun GarageSection(vm: AppViewModel) {
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { vm.setRiderName(nameText) }) { Text("Salvar") }
+            Button(onClick = { vm.saveRiderName(nameText) }) { Text("Salvar") }
         }
 
         if (b == null || picking) {
