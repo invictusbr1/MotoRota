@@ -57,10 +57,17 @@ object Http {
             }
             val code = try {
                 conn.responseCode
+            } catch (e: java.net.HttpRetryException) {
+                // POST + 401/407: o Android lança isto em vez de devolver o código
+                e.responseCode()
             } catch (e: IOException) {
-                if (e.message?.contains("authentication challenge", ignoreCase = true) == true) 401 else throw e
+                if (e.message?.contains("authentication", ignoreCase = true) == true) 401 else throw e
             }
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val stream = try {
+                if (code in 200..299) conn.inputStream else conn.errorStream
+            } catch (_: IOException) {
+                null
+            }
             val text = try {
                 stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             } catch (_: IOException) {
@@ -80,6 +87,26 @@ object Http {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Manda um relatório de erro (nunca com chaves) para a central, para o desenvolvedor ver. */
+    fun report(origem: String, texto: String) {
+        Thread {
+            runCatching {
+                val body = org.json.JSONObject()
+                    .put("p_origem", origem)
+                    .put("p_versao", com.motorota.BuildConfig.VERSION_NAME)
+                    .put("p_texto", texto.take(4000))
+                request(
+                    "${com.motorota.intercom.Intercom.SUPABASE_URL}/rest/v1/rpc/registrar_diagnostico", "POST",
+                    mapOf(
+                        "apikey" to com.motorota.intercom.Intercom.SUPABASE_KEY,
+                        "Authorization" to "Bearer ${com.motorota.intercom.Intercom.SUPABASE_KEY}",
+                    ),
+                    body.toString(),
+                )
+            }
+        }.start()
     }
 
     private fun host(url: String) = runCatching { URL(url).host }.getOrDefault("servidor")

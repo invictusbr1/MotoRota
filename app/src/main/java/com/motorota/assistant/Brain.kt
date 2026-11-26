@@ -180,13 +180,17 @@ class Brain(private val tools: List<Tool>) {
                     useVertex = vertex
                     workingModel = model
                     lines.add("✓ $nome · $model funcionou (${ms / 1000.0}s)")
-                    return@withContext lines.joinToString("\n")
+                    val ok = lines.joinToString("\n")
+                    com.motorota.data.Http.report("jarvis-teste", ok)
+                    return@withContext ok
                 }
                 lines.add("✗ $nome · $model: ${if (code < 0) "sem resposta" else "erro $code"} (${ms / 1000.0}s) ${msg.take(90)}")
                 if (code == 401 || code == 403) break // chave não serve neste serviço: não adianta outro modelo
             }
         }
-        lines.joinToString("\n")
+        val report = lines.joinToString("\n")
+        com.motorota.data.Http.report("jarvis-teste", report)
+        report
     }
 
     private fun endpoint(vertex: Boolean, model: String, key: String): String =
@@ -214,6 +218,12 @@ class Brain(private val tools: List<Tool>) {
     private fun post(url: String, key: String?, body: String): Pair<Int, String> {
         val headers = if (key != null) mapOf("x-goog-api-key" to key) else emptyMap()
         val r = com.motorota.data.Http.request(url, "POST", headers, body, readTimeoutMs = 20_000)
+        if (!r.ok) {
+            com.motorota.data.Http.report(
+                "jarvis",
+                "${url.substringBefore('?')} -> ${r.code} ${r.reason()} | ${r.text.take(600)}",
+            )
+        }
         // sem resposta nenhuma (sem rede, DNS, tempo esgotado): não adianta tentar outros modelos
         if (r.code < 0) throw BrainException("Não consegui falar com o Google: ${r.reason()}.")
         return r.code to r.text
