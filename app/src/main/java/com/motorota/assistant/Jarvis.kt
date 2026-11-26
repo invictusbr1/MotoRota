@@ -190,7 +190,7 @@ class Jarvis(
                         // roda à parte: se o Google travar, o Jarvis desiste em 35 s em vez de ficar "pensando" para sempre
                         val prompt = systemPrompt()
                         val job = scope.async(kotlinx.coroutines.Dispatchers.IO) { brain.ask(key, prompt, text) }
-                        kotlinx.coroutines.withTimeoutOrNull(35_000) { job.await() } ?: run {
+                        kotlinx.coroutines.withTimeoutOrNull(55_000) { job.await() } ?: run {
                             job.cancel()
                             "O Gemini demorou demais para responder. Teste em Ajustes, Testar o Jarvis."
                         }
