@@ -64,6 +64,8 @@ data class RouteResult(
     val hints: List<RouteHint>,
     /** Limite de velocidade por trecho (só onde o mapa informa) */
     val speedLimits: List<SpeedSegment> = emptyList(),
+    /** "TomTom" (mapa online, atualizado toda semana) ou "OSM" (mapa offline do BRouter) */
+    val source: String = "OSM",
 )
 
 data class SpeedSegment(val startM: Double, val endM: Double, val kmh: Int)

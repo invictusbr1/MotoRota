@@ -224,6 +224,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         knownRisksVersion++
         if (destination != null && !navigating) recalc(fit = false)
     }
+    /** Rotas pelo mapa TomTom (online, atualizado toda semana); sem internet usa o mapa offline. */
+    var freshMapOn by mutableStateOf(prefs.getBoolean("mapa_tomtom", true)); private set
+    fun toggleFreshMap() {
+        freshMapOn = !freshMapOn
+        prefs.edit().putBoolean("mapa_tomtom", freshMapOn).apply()
+        if (destination != null && !navigating) recalc(fit = false)
+    }
+
+    private suspend fun computeRoute(pts: List<GeoPoint>, m: Mode): RouteResult {
+        if (freshMapOn && com.motorota.routing.TomTomRouter.available) {
+            try {
+                return com.motorota.routing.TomTomRouter.route(pts, m, blocked(), known(), zones())
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!engine.hasAnyMap()) throw RouteException(
+                    "Sem conexão com o mapa online (${e.message}) e sem mapa offline baixado.",
+                )
+                val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
+                return r.copy(note = r.note ?: "📴 Sem o mapa online agora: rota pelo mapa offline (pode faltar obra recente).")
+            }
+        }
+        return engine.route(pts, m, blocked(), known(), corridors(), zones())
+    }
+
     fun known(): List<KnownRisk> = if (knownRisksOn) KnownRisks.all else emptyList()
     fun corridors(): List<Corridor> = if (knownRisksOn) Corridors.all else emptyList()
     fun zones(): List<UrbanZone> = if (knownRisksOn) Corridors.zones else emptyList()
@@ -769,7 +794,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             for (m in order) {
                 try {
                     riskDataReady.await()
-                    val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
+                    val r = computeRoute(pts, m)
                     if (gen != generation) return@launch
                     routes = routes + (m to r)
                     if (m == mode) {
@@ -873,7 +898,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 riskDataReady.await()
-                val r = engine.route(pts, m, blocked(), known(), corridors(), zones())
+                val r = computeRoute(pts, m)
                 routes = mapOf(m to r)
                 routeErrors = emptyMap()
                 navigator = Navigator(r)
@@ -1123,7 +1148,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var mapsVersion by mutableStateOf(0); private set
     var hasMaps by mutableStateOf(engine.hasAnyMap()); private set
 
+    private var refreshChecked = false
+
     fun pollDownloads() {
+        if (!refreshChecked) {
+            refreshChecked = true
+            val n = downloader.refreshStale()
+            if (n > 0) message = "Atualizando $n bloco(s) do mapa offline no Wi-Fi (mais de 30 dias)."
+        }
         val before = downloadProgress.pending
         downloadProgress = downloader.poll()
         if (downloadProgress.failed > 0) message = "Alguns mapas falharam. Toque em baixar novamente."

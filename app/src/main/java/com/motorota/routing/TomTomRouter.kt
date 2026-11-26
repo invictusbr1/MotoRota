@@ -1,0 +1,204 @@
+package com.motorota.routing
+
+import com.motorota.data.Http
+import com.motorota.data.KnownRisk
+import com.motorota.data.Keys
+import com.motorota.data.UrbanZone
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+import kotlin.math.cos
+
+/**
+ * Rotas pelo mapa da TomTom (online). O mapa deles é atualizado toda semana com dados de
+ * frota/GPS, então pega obra nova, rotatória nova e mão invertida bem antes do OpenStreetMap.
+ * Sem internet, o app volta para o BRouter (mapa offline).
+ */
+object TomTomRouter {
+    private const val MAX_AREAS = 10 // limite da TomTom
+
+    val available get() = Keys.tomtom.isNotBlank()
+
+    suspend fun route(
+        points: List<GeoPoint>,
+        mode: Mode,
+        risks: List<RiskArea>,
+        known: List<KnownRisk>,
+        zones: List<UrbanZone>,
+    ): RouteResult = withContext(Dispatchers.IO) {
+        val circles = ArrayList<Triple<GeoPoint, Double, Int>>() // centro, raio, prioridade
+        risks.forEach { circles.add(Triple(it.point, it.radiusM.toDouble(), 0)) }
+        if (mode != Mode.RAPIDA) known.filter { it.avoid }.forEach { circles.add(Triple(it.point, it.radiusM.toDouble(), 1)) }
+        if (mode == Mode.SEGURA) zones.filter { it.dense }.forEach { circles.add(Triple(it.point, it.radiusM, 2)) }
+        val areas = pickAreas(points, circles)
+
+        val avoid = when (mode) {
+            Mode.RAPIDA -> emptyList()
+            else -> listOf("unpavedRoads")
+        }
+        var travel = "motorcycle"
+        var sections = listOf("speedLimit", "motorway", "unpaved")
+        var res = call(points, travel, avoid, sections, areas)
+        if (res.code == 400) {
+            // modo moto é "beta" na TomTom: se recusar, tenta como carro e sem seções extras
+            travel = "car"; sections = emptyList()
+            res = call(points, travel, avoid, sections, areas)
+        }
+        if (!res.ok) {
+            Http.report("rota-tomtom", "HTTP ${res.code} ${res.reason()} ${res.text.take(300)}")
+            throw RouteException("TomTom: ${res.reason()}")
+        }
+        parse(mode, res.text)
+    }
+
+    private fun call(
+        points: List<GeoPoint>,
+        travel: String,
+        avoid: List<String>,
+        sections: List<String>,
+        areas: List<Pair<GeoPoint, GeoPoint>>,
+    ): com.motorota.data.HttpResult {
+        val locs = points.joinToString(":") { String.format(Locale.US, "%.6f,%.6f", it.lat, it.lon) }
+        val q = StringBuilder("https://api.tomtom.com/routing/1/calculateRoute/$locs/json?key=${Keys.tomtom}")
+        q.append("&travelMode=$travel&routeType=fastest&traffic=true&instructionsType=coded&language=pt-BR")
+        q.append("&routeRepresentation=polyline&computeTravelTimeFor=none")
+        avoid.forEach { q.append("&avoid=$it") }
+        sections.forEach { q.append("&sectionType=$it") }
+        val body = if (areas.isEmpty()) null else JSONObject().put(
+            "avoidAreas",
+            JSONObject().put(
+                "rectangles",
+                JSONArray().apply {
+                    areas.forEach { (sw, ne) ->
+                        put(
+                            JSONObject()
+                                .put("southWestCorner", JSONObject().put("latitude", sw.lat).put("longitude", sw.lon))
+                                .put("northEastCorner", JSONObject().put("latitude", ne.lat).put("longitude", ne.lon)),
+                        )
+                    }
+                },
+            ),
+        ).toString()
+        return Http.request(q.toString(), if (body != null) "POST" else "GET", body = body, readTimeoutMs = 20_000)
+    }
+
+    /** Até 10 retângulos, os mais próximos do caminho; nunca um que cubra a partida, paradas ou destino. */
+    private fun pickAreas(points: List<GeoPoint>, circles: List<Triple<GeoPoint, Double, Int>>): List<Pair<GeoPoint, GeoPoint>> {
+        if (circles.isEmpty()) return emptyList()
+        fun distToPath(p: GeoPoint): Double {
+            var best = Double.MAX_VALUE
+            for (i in 0 until points.size - 1) {
+                val a = points[i]; val b = points[i + 1]
+                // aproximação plana, suficiente para ordenar
+                val kx = 111_320 * cos(Math.toRadians(p.lat))
+                val ax = (a.lon - p.lon) * kx; val ay = (a.lat - p.lat) * 110_540
+                val bx = (b.lon - p.lon) * kx; val by = (b.lat - p.lat) * 110_540
+                val dx = bx - ax; val dy = by - ay
+                val l2 = dx * dx + dy * dy
+                val t = if (l2 > 0) (-(ax * dx + ay * dy) / l2).coerceIn(0.0, 1.0) else 0.0
+                val x = ax + t * dx; val y = ay + t * dy
+                best = minOf(best, kotlin.math.sqrt(x * x + y * y))
+            }
+            return best
+        }
+        val pathLen = (0 until points.size - 1).sumOf { points[it].distanceTo(points[it + 1]) }
+        val maxOff = (pathLen * 0.25).coerceIn(3_000.0, 40_000.0)
+        return circles
+            .filter { (c, r, _) -> points.none { it.distanceTo(c) < r + 150 } }
+            .map { it to distToPath(it.first) - it.second }
+            .filter { it.second < maxOff }
+            .sortedWith(compareBy({ it.first.third }, { it.second }))
+            .take(MAX_AREAS)
+            .map { (c, _) ->
+                val (p, r) = c.first to c.second
+                val dLat = r / 110_540
+                val dLon = r / (111_320 * cos(Math.toRadians(p.lat)))
+                GeoPoint(p.lat - dLat, p.lon - dLon) to GeoPoint(p.lat + dLat, p.lon + dLon)
+            }
+    }
+
+    private fun parse(mode: Mode, json: String): RouteResult {
+        val route = JSONObject(json).getJSONArray("routes").getJSONObject(0)
+        val summary = route.getJSONObject("summary")
+        val pts = ArrayList<GeoPoint>()
+        val legs = route.getJSONArray("legs")
+        for (l in 0 until legs.length()) {
+            val lp = legs.getJSONObject(l).getJSONArray("points")
+            for (i in 0 until lp.length()) {
+                val o = lp.getJSONObject(i)
+                pts.add(GeoPoint(o.getDouble("latitude"), o.getDouble("longitude")))
+            }
+        }
+        if (pts.size < 2) throw RouteException("A partida e o destino são o mesmo lugar.")
+        val cum = DoubleArray(pts.size)
+        for (i in 1 until pts.size) cum[i] = cum[i - 1] + pts[i - 1].distanceTo(pts[i])
+        val total = cum.last().coerceAtLeast(1.0)
+        val timeS = summary.optInt("travelTimeInSeconds")
+        val times = FloatArray(pts.size) { (cum[it] / total * timeS).toFloat() }
+
+        var motorway = 0.0
+        var unpaved = 0.0
+        val limits = ArrayList<SpeedSegment>()
+        route.optJSONArray("sections")?.let { s ->
+            for (i in 0 until s.length()) {
+                val sec = s.getJSONObject(i)
+                val a = sec.optInt("startPointIndex").coerceIn(0, pts.size - 1)
+                val b = sec.optInt("endPointIndex").coerceIn(0, pts.size - 1)
+                val len = cum[b] - cum[a]
+                when (sec.optString("sectionType")) {
+                    "MOTORWAY" -> motorway += len
+                    "UNPAVED" -> unpaved += len
+                    "SPEED_LIMIT" -> {
+                        val v = sec.optInt("maxSpeedLimitInKmh", 0)
+                        if (v > 0) limits.add(SpeedSegment(cum[a], cum[b], v))
+                    }
+                }
+            }
+        }
+
+        val hints = ArrayList<RouteHint>()
+        route.optJSONObject("guidance")?.optJSONArray("instructions")?.let { ins ->
+            for (i in 0 until ins.length()) {
+                val o = ins.getJSONObject(i)
+                val cmd = cmdFor(o.optString("maneuver")) ?: continue
+                val idx = o.optInt("pointIndex").coerceIn(0, pts.size - 1)
+                hints.add(RouteHint(idx, cmd, if (cmd == 13) o.optInt("roundaboutExitNumber", 0) else 0))
+            }
+        }
+
+        return RouteResult(
+            mode = mode,
+            points = pts,
+            cumDist = cum,
+            cumTime = times,
+            distanceM = summary.optInt("lengthInMeters", total.toInt()),
+            timeS = timeS,
+            highwayPct = ((motorway * 100) / total).toInt(),
+            unpavedM = unpaved.toInt(),
+            badPavingM = 0,
+            hints = hints,
+            speedLimits = limits.sortedBy { it.startM },
+            source = "TomTom",
+        )
+    }
+
+    /** Converte a manobra da TomTom no código usado pelas instruções de voz (padrão BRouter). */
+    private fun cmdFor(m: String): Int? = when (m) {
+        "STRAIGHT", "KEEP_STRAIGHT", "FOLLOW", "SWITCH_MAIN_ROAD", "SWITCH_PARALLEL_ROAD" -> 1
+        "TURN_LEFT" -> 2
+        "BEAR_LEFT" -> 3
+        "SHARP_LEFT" -> 4
+        "TURN_RIGHT" -> 5
+        "BEAR_RIGHT" -> 6
+        "SHARP_RIGHT" -> 7
+        "KEEP_LEFT", "ENTRANCE_RAMP" -> 8
+        "KEEP_RIGHT" -> 9
+        "MAKE_UTURN", "TRY_MAKE_UTURN" -> 10
+        "ROUNDABOUT_CROSS", "ROUNDABOUT_RIGHT", "ROUNDABOUT_LEFT", "ROUNDABOUT_BACK" -> 13
+        "MOTORWAY_EXIT_LEFT" -> 17
+        "MOTORWAY_EXIT_RIGHT" -> 18
+        else -> null // DEPART, ARRIVE, WAYPOINT..., saídas da rotatória etc.
+    }
+}

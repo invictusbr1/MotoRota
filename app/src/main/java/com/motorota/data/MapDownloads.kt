@@ -77,6 +77,31 @@ class MapDownloader(private val ctx: Context, private val segmentDir: File) {
         }
     }
 
+    /**
+     * Mapa offline com mais de 30 dias: baixa de novo (só no Wi-Fi). O brouter.de refaz os blocos
+     * toda semana a partir do OpenStreetMap. Retorna quantos blocos entraram na fila.
+     */
+    fun refreshStale(maxAgeDays: Int = 30): Int {
+        val limit = System.currentTimeMillis() - maxAgeDays * 86_400_000L
+        val old = segmentDir.listFiles()?.filter { it.name.endsWith(".rd5") && it.length() > 0 && it.lastModified() < limit }
+            ?: return 0
+        var n = 0
+        for (f in old) {
+            val tile = f.name.removeSuffix(".rd5")
+            if (prefs.contains(tile)) continue
+            File(segmentDir, "$tile.rd5.part").delete()
+            val req = DownloadManager.Request(Uri.parse("$BASE_URL$tile.rd5"))
+                .setTitle("MotoRota: atualizando mapa $tile")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+                .setDestinationInExternalFilesDir(ctx, null, "brouter/segments4/$tile.rd5.part")
+                .setAllowedOverMetered(false)
+                .setAllowedOverRoaming(false)
+            prefs.edit().putLong(tile, dm.enqueue(req)).apply()
+            n++
+        }
+        return n
+    }
+
     data class Progress(val pending: Int, val bytesDone: Long, val bytesTotal: Long, val failed: Int)
 
     /**

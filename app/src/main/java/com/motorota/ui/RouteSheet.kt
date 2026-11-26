@@ -215,6 +215,7 @@ fun RouteSheet(vm: AppViewModel, onSaveTrip: () -> Unit) {
                             vm.trafficStatus?.let { ts ->
                                 StatusPill(emoji = "🚦", text = ts)
                             }
+                            if (r.source == "TomTom") StatusPill(emoji = "🗺️", text = "Mapa atualizado")
                         }
 
                         // Caixa consolidada de avisos importantes (só aparece quando há alertas reais)

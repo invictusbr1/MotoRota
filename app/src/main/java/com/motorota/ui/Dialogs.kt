@@ -846,6 +846,26 @@ fun SettingsCards(vm: AppViewModel, withMic: (() -> Unit) -> Unit = { it() }, se
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
         ) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Mapa atualizado (TomTom)", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Calcula a rota no mapa da TomTom, atualizado toda semana (obras, rotatórias e mão nova). " +
+                            "Sem internet, usa o mapa offline. O mapa offline se atualiza sozinho no Wi-Fi a cada 30 dias.",
+                        color = TextDim,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(checked = vm.freshMapOn, onCheckedChange = { vm.toggleFreshMap() })
+            }
+        }
+        Surface(
+            color = SurfaceCard,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+        ) {
             Row(
                 Modifier.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
