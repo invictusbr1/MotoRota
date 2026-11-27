@@ -196,6 +196,10 @@ fun MapLibreMapView(
             m.locationComponent.forceLocationUpdate(Location(loc))
         }
         if (vm.navigating && vm.following) {
+            // se alguma animação (ex.: enquadrar a rota) desfez a inclinação, põe de volta
+            if (m.locationComponent.isLocationComponentActivated && abs(m.cameraPosition.tilt - NAV_TILT) > 6) {
+                m.locationComponent.tiltWhileTracking(NAV_TILT, 900)
+            }
             val target = navZoom(vm.speedKmh, vm.navState?.distToHintM)
             if ((abs(target - m.cameraPosition.zoom) > 0.3 && abs(target - currentZoom) > 0.05) ||
                 abs(target - m.cameraPosition.zoom) > 1.0
@@ -227,7 +231,7 @@ fun MapLibreMapView(
                 vm.myLocation?.let {
                     m.animateCamera(
                         CameraUpdateFactory.newCameraPosition(
-                            CameraPosition.Builder().target(LatLng(it.lat, it.lon)).zoom(currentZoom).tilt(38.0).build()
+                            CameraPosition.Builder().target(LatLng(it.lat, it.lon)).zoom(currentZoom).tilt(NAV_TILT).build()
                         )
                     )
                 }
@@ -351,13 +355,17 @@ private fun minRouteDist(pts: List<GeoPoint>, p: GeoPoint): Double {
     return best
 }
 
+/** inclinação do mapa navegando (0 = visto de cima, 60 = o máximo deitado) */
+private const val NAV_TILT = 56.0
+
 private fun follow(m: MapLibreMap, zoom: Double) {
     val lc = m.locationComponent
     val h = m.height.toDouble().takeIf { it > 0 } ?: 1600.0
-    // visão estilo Waze: seta um pouco abaixo do meio, pouca inclinação, enxerga mais à frente e dos lados
-    m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.30, 0.0, h * 0.12))
+    // visão de quem pilota: seta abaixo do meio e mapa bem inclinado ("sol das 3, 4 da tarde")
+    m.cancelTransitions()
+    m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.34, 0.0, h * 0.12))
     lc.cameraMode = CameraMode.TRACKING_GPS
-    lc.tiltWhileTracking(38.0)
+    lc.tiltWhileTracking(NAV_TILT)
     lc.zoomWhileTracking(zoom)
 }
 
