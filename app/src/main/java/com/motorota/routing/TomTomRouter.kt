@@ -136,7 +136,22 @@ object TomTomRouter {
         }
         val tt = parse(base.mode, res.text)
 
-        // 2) trechos onde o caminho seguro sai do caminho da TomTom e depois volta
+        // 2) se o caminho do mapa novo for tão seguro quanto o do motor de segurança, usa ele inteiro
+        //    (mapa atualizado: obra, pista nova, viaduto). Se passar mais por área de risco, fica o seguro.
+        val margin = when (base.mode) { Mode.SEGURA -> 150.0; Mode.DESEMPENHO -> 600.0; Mode.RAPIDA -> 2500.0 }
+        val rBase = risky(base, known, zones, corridors)
+        val rTt = risky(tt, known, zones, corridors)
+        val blockedHit = tt.points.any { p -> risks.any { p.distanceTo(it.point) < it.radiusM } }
+        if (!blockedHit && rTt <= rBase + margin && tt.cumDist.last() <= base.cumDist.last() * 1.15) {
+            Http.report(
+                "rota-desvio",
+                "${base.mode.label}: usou mapa novo inteiro (${tt.distanceM / 1000} km, risco ${rTt.toInt()} m) " +
+                    "no lugar do offline (${base.distanceM / 1000} km, risco ${rBase.toInt()} m)",
+            )
+            return@withContext tt.copy(note = base.note)
+        }
+
+        // 3) trechos onde o caminho seguro sai do caminho da TomTom e depois volta
         val n = base.points.size
         val off = BooleanArray(n)
         val ttIdx = IntArray(n)
@@ -166,7 +181,11 @@ object TomTomRouter {
             if (tb <= ta + 1 || tb >= tt.points.size) continue
             val ttLen = tt.cumDist[tb] - tt.cumDist[ta]
             // só conserta "volta" local (até 30 km) em que o caminho do mapa novo é bem mais curto
-            if (baseLen > 30_000 || baseLen < ttLen * 1.3 + 500) continue
+            if (baseLen > 30_000 || baseLen < ttLen * 1.3 + 500) {
+                Http.report("rota-desvio", String.format(Locale.US, "diferença em %.5f,%.5f: offline %.1f km x novo %.1f km (não trocou)",
+                    base.points[r.a].lat, base.points[r.a].lon, baseLen / 1000, ttLen / 1000))
+                continue
+            }
             val seg = sub(tt, ta, tb)
             val oldSeg = slice(base, r.a, r.b)
             val worse = risky(seg, known, zones, corridors) > risky(oldSeg, known, zones, corridors) + 200 ||
@@ -179,7 +198,8 @@ object TomTomRouter {
                 String.format(Locale.US, "corrigido em %.5f,%.5f: %.1f km -> %.1f km", base.points[r.a].lat, base.points[r.a].lon, baseLen / 1000, ttLen / 1000),
             )
         }
-        Http.report("rota-desvio", "${base.mode.label}: ${runs.size} diferenças, $fixed corrigidas, $kept mantidas por segurança")
+        Http.report("rota-desvio", "${base.mode.label}: mapa novo mais arriscado (risco ${rTt.toInt()} x ${rBase.toInt()} m, bloqueada=$blockedHit); " +
+            "${runs.size} diferenças, $fixed corrigidas, $kept mantidas por segurança")
         out
     }
 
