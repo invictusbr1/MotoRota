@@ -1,0 +1,35 @@
+name: Diagnostico de rota
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Motor de rota (jar)
+        run: |
+          chmod +x gradlew
+          ./gradlew :brouter:jar -q
+          ls brouter/build/libs
+      - name: Mapa offline (mesmo que o app baixa)
+        run: |
+          mkdir -p seg prof
+          for t in W45_S25 W50_S25; do curl -sSfL -o seg/$t.rd5 https://brouter.de/brouter/segments4/$t.rd5; done
+          ls -la --time-style=full-iso seg
+          curl -sI https://brouter.de/brouter/segments4/W45_S25.rd5 | grep -i last-modified || true
+          cp app/src/main/assets/brouter/* prof/
+      - name: Rota Caxias -> Campinas (Desempenho)
+        run: |
+          JAR=$(ls brouter/build/libs/*.jar | head -1)
+          javac -cp $JAR -d out scripts/diag/RouteTest.java
+          java -Xmx2g -cp $JAR:out RouteTest seg prof/moto.brf "-43.33790,-22.64353|-47.0608,-22.9056" 1 > rota.json
+      - name: Analise
+        env:
+          TOMTOM_KEY: ${{ secrets.TOMTOM_KEY }}
+        run: python3 scripts/diag/diag.py rota.json
