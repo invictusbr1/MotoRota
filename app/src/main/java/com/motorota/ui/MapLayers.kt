@@ -260,9 +260,11 @@ object MapLayers {
             if (labelAnchor != null) style.addLayerBelow(layer, labelAnchor) else style.addLayer(layer)
         }
 
-        // alta resolução até zoom 19 nas cidades; acima disso o MapLibre amplia a última imagem
+        // a Esri devolve uma imagem CINZA ("sem dados") quando não tem foto naquele zoom (comum acima
+        // de 17 fora do centro das cidades). Pedindo no máximo zoom 17, o MapLibre amplia essa foto
+        // em vez de mostrar cinza.
         val satTiles = TileSet("2.1.0", SAT_URL).apply {
-            maxZoom = 19f
+            maxZoom = 17f
             attribution = "Imagens © Esri, Maxar, Earthstar Geographics"
         }
         style.addSource(RasterSource(SRC_SAT, satTiles, 256))
