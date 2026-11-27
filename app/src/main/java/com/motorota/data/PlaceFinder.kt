@@ -21,6 +21,7 @@ import java.util.Locale
  */
 class PlaceFinder(ctx: Context) {
     private val file = File(ctx.filesDir, "lugares_salvos.json")
+    private val prefs = ctx.getSharedPreferences("busca_google", Context.MODE_PRIVATE)
 
     data class Saved(val name: String, val detail: String, val point: GeoPoint, val aliases: List<String>, val used: Long)
 
@@ -76,6 +77,7 @@ class PlaceFinder(ctx: Context) {
     suspend fun googlePlaces(query: String, near: GeoPoint?): Place? = withContext(Dispatchers.IO) {
         val key = Keys.google
         if (key.isBlank()) return@withContext null
+        if (!allowGoogle()) return@withContext null
         val body = JSONObject().put("textQuery", query).put("languageCode", "pt-BR").put("regionCode", "BR").put("pageSize", 5)
         if (near != null) body.put(
             "locationBias",
@@ -110,6 +112,37 @@ class PlaceFinder(ctx: Context) {
         val p = Place(name, addr, GeoPoint(loc.getDouble("latitude"), loc.getDouble("longitude")))
         Http.report("busca-google", "\"$query\" -> $name | $addr")
         p
+    }
+
+    /**
+     * Segunda trava contra cobrança (a primeira é a cota diária no Google Cloud):
+     * - a central conta as buscas de TODOS os celulares no mês e para em 4.500 (a faixa grátis é maior);
+     * - cada celular faz no máximo 60 por dia.
+     * Se não der para confirmar com a central, NÃO pesquisa (melhor ficar sem do que pagar).
+     */
+    private fun allowGoogle(): Boolean {
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
+        val day = prefs.getString("google_dia", "")
+        val n = if (day == today) prefs.getInt("google_n", 0) else 0
+        if (n >= 60) {
+            Http.report("busca-google", "limite do dia neste celular (60) atingido")
+            return false
+        }
+        val r = Http.request(
+            "${com.motorota.intercom.Intercom.SUPABASE_URL}/rest/v1/rpc/usar_google", "POST",
+            mapOf(
+                "apikey" to com.motorota.intercom.Intercom.SUPABASE_KEY,
+                "Authorization" to "Bearer ${com.motorota.intercom.Intercom.SUPABASE_KEY}",
+            ),
+            "{}", readTimeoutMs = 6_000,
+        )
+        val ok = r.ok && r.text.trim() == "true"
+        if (!ok) {
+            Http.report("busca-google", if (r.ok) "limite do MÊS atingido: busca do Google parada até o mês que vem" else "não confirmou a cota (${r.code}): não pesquisou")
+            return false
+        }
+        prefs.edit().putString("google_dia", today).putInt("google_n", n + 1).apply()
+        return true
     }
 
     /**
