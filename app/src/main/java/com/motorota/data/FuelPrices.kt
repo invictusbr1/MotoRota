@@ -35,16 +35,117 @@ object FuelPrices {
         if (data == null && f.exists()) data = runCatching { JSONObject(f.readText()) }.getOrNull()
     }
 
-    /** Baixa a tabela da semana se a cópia tiver mais de 3 dias. */
+    /** Baixa a tabela da semana se a cópia tiver mais de 3 dias (do GitHub; se não tiver, direto da ANP). */
     fun refresh() {
         val f = file ?: return
         if (f.exists() && data != null && System.currentTimeMillis() - f.lastModified() < 3 * 86_400_000L) return
         val r = Http.request(URL, readTimeoutMs = 15_000)
-        if (!r.ok) return
-        val o = runCatching { JSONObject(r.text) }.getOrNull() ?: return
-        if ((o.optJSONObject("estados")?.length() ?: 0) < 20) return
-        f.writeText(r.text)
-        data = o
+        val o = if (r.ok) runCatching { JSONObject(r.text) }.getOrNull() else null
+        if (o != null && (o.optJSONObject("estados")?.length() ?: 0) >= 20) {
+            f.writeText(r.text)
+            data = o
+            return
+        }
+        // o servidor não conseguiu (o site da ANP às vezes bloqueia servidores): o celular baixa direto
+        val anp = runCatching { fromAnp() }.onFailure { Http.report("combustivel", "ANP direto: $it") }.getOrNull() ?: return
+        f.writeText(anp.toString())
+        data = anp
+    }
+
+    private const val ANP_PAGE =
+        "https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-de-precos-de-combustiveis-ultimas-semanas-pesquisadas"
+    private val UF = mapOf(
+        "ACRE" to "AC", "ALAGOAS" to "AL", "AMAPA" to "AP", "AMAZONAS" to "AM", "BAHIA" to "BA", "CEARA" to "CE",
+        "DISTRITO FEDERAL" to "DF", "ESPIRITO SANTO" to "ES", "GOIAS" to "GO", "MARANHAO" to "MA", "MATO GROSSO" to "MT",
+        "MATO GROSSO DO SUL" to "MS", "MINAS GERAIS" to "MG", "PARA" to "PA", "PARAIBA" to "PB", "PARANA" to "PR",
+        "PERNAMBUCO" to "PE", "PIAUI" to "PI", "RIO DE JANEIRO" to "RJ", "RIO GRANDE DO NORTE" to "RN",
+        "RIO GRANDE DO SUL" to "RS", "RONDONIA" to "RO", "RORAIMA" to "RR", "SANTA CATARINA" to "SC", "SAO PAULO" to "SP",
+        "SERGIPE" to "SE", "TOCANTINS" to "TO",
+    )
+
+    /** Lê a planilha semanal da ANP (aba ESTADOS) direto no celular. */
+    private fun fromAnp(): JSONObject? {
+        val page = Http.request(ANP_PAGE, readTimeoutMs = 20_000)
+        if (!page.ok) return null
+        val link = Regex("https://[^\"]*resumo_semanal_lpc[^\"]*\\.xlsx").find(page.text)?.value ?: return null
+        val conn = (java.net.URL(link).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 15_000; readTimeout = 60_000
+            setRequestProperty("User-Agent", "Mozilla/5.0")
+        }
+        val bytes = conn.inputStream.use { it.readBytes() }
+        val files = HashMap<String, ByteArray>()
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { z ->
+            var e = z.nextEntry
+            while (e != null) {
+                if (e.name == "xl/sharedStrings.xml" || e.name.startsWith("xl/worksheets/sheet")) files[e.name] = z.readBytes()
+                e = z.nextEntry
+            }
+        }
+        val shared = ArrayList<String>()
+        files["xl/sharedStrings.xml"]?.let { xml ->
+            val p = android.util.Xml.newPullParser(); p.setInput(xml.inputStream(), "UTF-8")
+            val sb = StringBuilder(); var inSi = false; var inT = false
+            while (p.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                when (p.eventType) {
+                    org.xmlpull.v1.XmlPullParser.START_TAG -> when (p.name) { "si" -> { inSi = true; sb.setLength(0) }; "t" -> inT = true }
+                    org.xmlpull.v1.XmlPullParser.TEXT -> if (inSi && inT) sb.append(p.text)
+                    org.xmlpull.v1.XmlPullParser.END_TAG -> when (p.name) { "t" -> inT = false; "si" -> { inSi = false; shared.add(sb.toString()) } }
+                }
+            }
+        }
+        val estados = JSONObject(); var semana = ""
+        val tot = HashMap<String, DoubleArray>()
+        for ((name, xml) in files) {
+            if (!name.startsWith("xl/worksheets/")) continue
+            val rows = ArrayList<List<String>>()
+            val p = android.util.Xml.newPullParser(); p.setInput(xml.inputStream(), "UTF-8")
+            var row = ArrayList<String>(); var type = ""; var inV = false; val v = StringBuilder(); var col = 0
+            while (p.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                when (p.eventType) {
+                    org.xmlpull.v1.XmlPullParser.START_TAG -> when (p.name) {
+                        "row" -> row = ArrayList()
+                        "c" -> {
+                            type = p.getAttributeValue(null, "t") ?: ""; v.setLength(0)
+                            // coluna pela referência ("D12" -> 3): células vazias não vêm no arquivo
+                            col = p.getAttributeValue(null, "r")?.takeWhile { it.isLetter() }
+                                ?.fold(0) { acc, ch -> acc * 26 + (ch - 'A' + 1) }?.minus(1) ?: row.size
+                        }
+                        "v", "t" -> inV = true
+                    }
+                    org.xmlpull.v1.XmlPullParser.TEXT -> if (inV) v.append(p.text)
+                    org.xmlpull.v1.XmlPullParser.END_TAG -> when (p.name) {
+                        "v", "t" -> inV = false
+                        "c" -> {
+                            while (row.size < col) row.add("")
+                            row.add(if (type == "s") shared.getOrElse(v.toString().toIntOrNull() ?: -1) { "" } else v.toString())
+                        }
+                        "row" -> rows.add(row)
+                    }
+                }
+            }
+            val hi = rows.indexOfFirst { it.contains("ESTADOS") && it.contains("PRODUTO") }
+            if (hi < 0) continue
+            val h = rows[hi]
+            val iUf = h.indexOf("ESTADOS"); val iProd = h.indexOf("PRODUTO")
+            val iPreco = h.indexOf("PREÇO MÉDIO REVENDA"); val iN = h.indexOf("NÚMERO DE POSTOS PESQUISADOS")
+            for (r in rows.drop(hi + 1)) {
+                val uf = UF[r.getOrNull(iUf)?.trim()] ?: continue
+                val prod = when (r.getOrNull(iProd)?.trim()) {
+                    "GASOLINA COMUM" -> "comum"; "GASOLINA ADITIVADA" -> "aditivada"; "ETANOL HIDRATADO" -> "etanol"; else -> null
+                } ?: continue
+                val preco = r.getOrNull(iPreco)?.toDoubleOrNull() ?: continue
+                val n = r.getOrNull(iN)?.toDoubleOrNull() ?: 0.0
+                (estados.optJSONObject(uf) ?: JSONObject().also { estados.put(uf, it) }).put(prod, Math.round(preco * 100) / 100.0)
+                tot.getOrPut(prod) { DoubleArray(2) }.let { it[0] += preco * n; it[1] += n }
+            }
+            Regex("lpc_(\\d{4})[_-](\\d{2})[_-](\\d{2})[_-](\\d{4})[_-](\\d{2})[_-](\\d{2})").find(link)?.groupValues?.let {
+                semana = "${it[3]}/${it[2]} a ${it[6]}/${it[5]}/${it[4]}"
+            }
+        }
+        if (estados.length() < 20) return null
+        val br = JSONObject()
+        tot.forEach { (k, a) -> if (a[1] > 0) br.put(k, Math.round(a[0] / a[1] * 100) / 100.0) }
+        return JSONObject().put("fonte", "ANP").put("semana", semana).put("estados", estados).put("brasil", br)
     }
 
     val week: String? get() = data?.optString("semana")?.takeIf { it.isNotBlank() }
