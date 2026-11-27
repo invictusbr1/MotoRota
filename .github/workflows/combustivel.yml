@@ -3,6 +3,7 @@ name: Preco da gasolina (ANP)
 on:
   schedule:
     - cron: "0 12 * * 2"   # toda terca (a ANP publica no fim de semana)
+    - cron: "0 15 * * 3"   # e de novo na quarta, se o site da ANP tiver falhado
   workflow_dispatch:
 
 permissions:
@@ -17,9 +18,19 @@ jobs:
       - name: Baixar planilha da ANP
         run: |
           P="https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-de-precos-de-combustiveis-ultimas-semanas-pesquisadas"
-          X=$(curl -sSL --retry 5 --retry-all-errors -A "Mozilla/5.0" "$P" | grep -o 'https://[^"]*resumo_semanal_lpc[^"]*\.xlsx' | head -1)
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          # o site da ANP às vezes recusa conexão: tenta por alguns minutos
+          for i in 1 2 3 4 5 6 7 8; do
+            X=$(curl -sSL --http1.1 --tlsv1.2 --max-time 60 -A "$UA" "$P" | grep -o 'https://[^"]*resumo_semanal_lpc[^"]*\.xlsx' | head -1)
+            [ -n "$X" ] && break
+            echo "tentativa $i falhou"; sleep 40
+          done
           echo "planilha: $X"
-          curl -sSL --retry 5 --retry-all-errors -A "Mozilla/5.0" "$X" -o resumo.xlsx
+          [ -n "$X" ]
+          for i in 1 2 3 4 5 6; do
+            curl -sSL --http1.1 --tlsv1.2 --max-time 120 -A "$UA" "$X" -o resumo.xlsx && break
+            sleep 40
+          done
       - run: python3 scripts/atualizar_combustivel.py resumo.xlsx
       - name: Salvar
         run: |
