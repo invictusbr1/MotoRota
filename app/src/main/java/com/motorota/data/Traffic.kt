@@ -23,6 +23,8 @@ data class LiveIncident(
     val point: GeoPoint,
     val isClosure: Boolean,
     val where: String,
+    /** linha inteira da ocorrência (para conferir se é a MESMA pista da rota) */
+    val pts: List<GeoPoint> = emptyList(),
 )
 
 /**
@@ -68,7 +70,15 @@ object Traffic {
             for (i in 0 until arr.length()) {
                 val inc = parse(arr.getJSONObject(i)) ?: continue
                 if (inc.id in found) continue
-                if (distToRoute(route.points, inc.point) <= 20.0) found[inc.id] = inc
+                if (distToRoute(route.points, inc.point) > 20.0) continue
+                if (inc.isClosure && !sameRoad(route.points, inc.pts)) {
+                    // interdição numa pista vizinha (ex.: a pista velha da Serra das Araras, embaixo dos
+                    // viadutos novos) não fecha a NOSSA pista: não desvia por causa dela
+                    Http.report("interdicao", "ignorada (pista vizinha) em ${"%.5f,%.5f".format(java.util.Locale.US, inc.point.lat, inc.point.lon)} ${inc.where}")
+                    continue
+                }
+                if (inc.isClosure) Http.report("interdicao", "na rota em ${"%.5f,%.5f".format(java.util.Locale.US, inc.point.lat, inc.point.lon)} ${inc.where}")
+                found[inc.id] = inc
             }
         }
         if (ok == 0 && lastError != null) throw lastError!!
@@ -138,6 +148,7 @@ object Traffic {
             // magnitude 4 = via fechada, mesmo quando a categoria e outra
             isClosure = cat == 8 || magnitude == 4,
             where = where,
+            pts = pts,
         )
     }
 
@@ -183,6 +194,44 @@ object Traffic {
         }
         if (minLat <= maxLat) out.add(doubleArrayOf(minLon - pad, minLat - pad, maxLon + pad, maxLat + pad))
         return out
+    }
+
+    /**
+     * A interdição está mesmo na pista da rota? Quase toda a linha dela tem que estar colada na rota
+     * (até 12 m) e no MESMO sentido. Pista paralela, pista contrária ou pista velha ao lado não contam.
+     */
+    private fun sameRoad(route: List<GeoPoint>, inc: List<GeoPoint>): Boolean {
+        if (inc.size < 2) return distToRoute(route, inc.firstOrNull() ?: return false) <= 8.0
+        var near = 0; var aligned = 0; var segs = 0
+        for (i in inc.indices) if (distToRoute(route, inc[i]) <= 12.0) near++
+        for (i in 1 until inc.size) {
+            val a = inc[i - 1]; val b = inc[i]
+            if (a.distanceTo(b) < 15) continue
+            segs++
+            val rb = routeBearingNear(route, GeoPoint((a.lat + b.lat) / 2, (a.lon + b.lon) / 2)) ?: continue
+            var d = Math.abs(bearing(a, b) - rb) % 360
+            if (d > 180) d = 360 - d
+            if (d < 35) aligned++
+        }
+        val nearOk = near >= Math.ceil(inc.size * 0.8)
+        val dirOk = segs == 0 || aligned >= Math.ceil(segs * 0.7)
+        return nearOk && dirOk
+    }
+
+    private fun bearing(a: GeoPoint, b: GeoPoint): Double {
+        val y = (b.lon - a.lon) * cos(Math.toRadians(a.lat))
+        val x = b.lat - a.lat
+        return (Math.toDegrees(Math.atan2(y, x)) + 360) % 360
+    }
+
+    private fun routeBearingNear(route: List<GeoPoint>, p: GeoPoint): Double? {
+        var best = Double.MAX_VALUE; var at = -1
+        for (i in 0 until route.size - 1) {
+            val d = distToRoute(listOf(route[i], route[i + 1]), p)
+            if (d < best) { best = d; at = i }
+        }
+        if (at < 0 || best > 30) return null
+        return bearing(route[at], route[at + 1])
     }
 
     private fun distToRoute(pts: List<GeoPoint>, p: GeoPoint): Double {
