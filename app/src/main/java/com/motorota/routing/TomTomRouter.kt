@@ -104,6 +104,119 @@ object TomTomRouter {
         r.copy(badPavingM = base.badPavingM, unpavedM = maxOf(r.unpavedM, base.unpavedM), note = base.note)
     }
 
+    /**
+     * Conserta "volta esquisita": quando o mapa offline está desatualizado (ex.: pista nova da Serra
+     * das Araras, viaduto novo, obra), o BRouter acha que a rodovia está interrompida e manda sair
+     * por estrada vicinal e voltar mais à frente. Aqui o app procura esses laços (anda muito para
+     * chegar perto de onde já estava), pergunta à TomTom o caminho direto só naquele trecho e troca,
+     * se for bem mais curto e não passar mais por área de risco.
+     */
+    suspend fun fixDetours(
+        base: RouteResult,
+        risks: List<RiskArea>,
+        known: List<KnownRisk>,
+        zones: List<UrbanZone>,
+    ): RouteResult = withContext(Dispatchers.IO) {
+        val n = base.points.size
+        if (n < 10) return@withContext base
+        // pontos a cada ~200 m
+        val s = ArrayList<Int>()
+        var next = 0.0
+        for (i in 0 until n) if (base.cumDist[i] >= next) { s.add(i); next = base.cumDist[i] + 200 }
+        if (s.last() != n - 1) s.add(n - 1)
+        val found = ArrayList<Pair<Int, Int>>()
+        var k = 0
+        while (k < s.size && found.size < 4) {
+            val a = s[k]
+            var best = -1; var bestWaste = 0.0
+            var m = k + 1
+            while (m < s.size && base.cumDist[s[m]] - base.cumDist[a] <= 40_000) {
+                val b = s[m]
+                val along = base.cumDist[b] - base.cumDist[a]
+                val straight = base.points[a].distanceTo(base.points[b])
+                val waste = along - 1.6 * straight
+                if (straight < 6_000 && along > 2.5 * straight + 3_000 && waste > bestWaste) { best = m; bestWaste = waste }
+                m++
+            }
+            if (best < 0) { k++; continue }
+            found.add(a to s[best])
+            k = best + 1
+        }
+        if (found.isEmpty()) return@withContext base
+        var out = base
+        var shift = 0 // índices mudam depois de cada troca
+        for ((a0, b0) in found) {
+            val a = a0 + shift; val b = b0 + shift
+            val pa = out.points[a]; val pb = out.points[b]
+            val url = "https://api.tomtom.com/routing/1/calculateRoute/" +
+                String.format(Locale.US, "%.6f,%.6f:%.6f,%.6f", pa.lat, pa.lon, pb.lat, pb.lon) +
+                "/json?key=${Keys.tomtom}&travelMode=car&routeType=fastest&traffic=false&instructionsType=coded" +
+                "&language=pt-BR&routeRepresentation=polyline&computeTravelTimeFor=none&sectionType=speedLimit"
+            val res = Http.request(url, readTimeoutMs = 10_000)
+            if (!res.ok) continue
+            val seg = runCatching { parse(out.mode, res.text) }.getOrNull() ?: continue
+            val oldLen = out.cumDist[b] - out.cumDist[a]
+            val newLen = seg.cumDist.last()
+            val sub = slice(out, a, b)
+            val worse = exposure(seg, known, zones) > exposure(sub, known, zones) + 200 ||
+                seg.points.any { p -> risks.any { p.distanceTo(it.point) < it.radiusM } }
+            if (newLen > oldLen * 0.75 || worse) {
+                Http.report("rota-desvio", "mantido laço de ${(oldLen / 1000).toInt()} km (TomTom ${(newLen / 1000).toInt()} km, risco=$worse)")
+                continue
+            }
+            Http.report(
+                "rota-desvio",
+                String.format(Locale.US, "corrigido laço em %.5f,%.5f: %.1f km -> %.1f km", pa.lat, pa.lon, oldLen / 1000, newLen / 1000),
+            )
+            val before = out.points.size
+            out = splice(out, a, b, seg)
+            shift += out.points.size - before
+        }
+        out
+    }
+
+    private fun slice(r: RouteResult, a: Int, b: Int): RouteResult {
+        val pts = r.points.subList(a, b + 1)
+        val cum = DoubleArray(pts.size) { r.cumDist[a + it] - r.cumDist[a] }
+        return r.copy(points = pts, cumDist = cum, cumTime = FloatArray(pts.size), hints = emptyList(), speedLimits = emptyList())
+    }
+
+    /** Troca os pontos a..b da rota pelo trecho novo, refazendo distâncias, tempos, manobras e limites. */
+    private fun splice(r: RouteResult, a: Int, b: Int, seg: RouteResult): RouteResult {
+        val pts = ArrayList<GeoPoint>(r.points.size)
+        pts.addAll(r.points.subList(0, a + 1))
+        pts.addAll(seg.points.drop(1))
+        val joinB = pts.size - 1
+        pts.addAll(r.points.subList(b + 1, r.points.size))
+        val cum = DoubleArray(pts.size)
+        for (i in 1 until pts.size) cum[i] = cum[i - 1] + pts[i - 1].distanceTo(pts[i])
+        val tA = r.cumTime[a]
+        val tSeg = seg.cumTime.last()
+        val tOld = r.cumTime[b] - r.cumTime[a]
+        val time = FloatArray(pts.size)
+        for (i in pts.indices) {
+            time[i] = when {
+                i <= a -> r.cumTime[i]
+                i <= joinB -> tA + seg.cumTime[(i - a).coerceAtMost(seg.cumTime.size - 1)]
+                else -> r.cumTime[i - joinB + b] - tOld + tSeg
+            }
+        }
+        val idxShift = joinB - b
+        val hints = r.hints.filter { it.index <= a } +
+            seg.hints.filter { it.index > 0 }.map { it.copy(index = it.index + a) } +
+            r.hints.filter { it.index > b }.map { it.copy(index = it.index + idxShift) }
+        val dA = r.cumDist[a]
+        val dDelta = cum[joinB] - r.cumDist[b]
+        val limits = r.speedLimits.filter { it.endM <= dA } +
+            seg.speedLimits.map { SpeedSegment(it.startM + dA, it.endM + dA, it.kmh) } +
+            r.speedLimits.filter { it.startM >= r.cumDist[b] }.map { SpeedSegment(it.startM + dDelta, it.endM + dDelta, it.kmh) }
+        return r.copy(
+            points = pts, cumDist = cum, cumTime = time,
+            distanceM = cum.last().toInt(), timeS = time.last().toInt(),
+            hints = hints, speedLimits = limits.sortedBy { it.startM },
+        )
+    }
+
     /** null = o desenho novo segue o caminho seguro; senão, o motivo de descartar. */
     private fun rejectReason(base: RouteResult, r: RouteResult, known: List<KnownRisk>, zones: List<UrbanZone>): String? {
         val lb = base.cumDist.last(); val lr = r.cumDist.last()

@@ -241,8 +241,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun computeRoute(pts: List<GeoPoint>, m: Mode): RouteResult {
         val tt = com.motorota.routing.TomTomRouter
         if (engine.hasAnyMap()) {
-            val base = engine.route(pts, m, blocked(), known(), corridors(), zones())
+            var base = engine.route(pts, m, blocked(), known(), corridors(), zones())
             if (freshMapOn && tt.available) {
+                // mapa offline desatualizado (obra/pista nova) faz o BRouter dar "volta esquisita": conserta pelo mapa novo
+                try {
+                    base = tt.fixDetours(base, blocked(), known(), zones())
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                }
                 try {
                     tt.refine(pts, base, known(), zones())?.let { return it }
                 } catch (e: kotlinx.coroutines.CancellationException) {
