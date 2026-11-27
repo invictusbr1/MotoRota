@@ -258,6 +258,13 @@ class Intercom(
         saveGroups()
     }
 
+    suspend fun reportRadar(lat: Double, lon: Double, limit: Int) {
+        rpc(
+            "reportar_radar",
+            JSONObject().put("p_id", myId).put("p_segredo", secret).put("p_lat", lat).put("p_lon", lon).put("p_limite", limit),
+        )
+    }
+
     private fun prefsOutbox(): JSONArray = runCatching { JSONArray(prefs.getString("saida", "[]")) }.getOrDefault(JSONArray())
 
     private fun saveOutbox(a: JSONArray) {

@@ -212,6 +212,26 @@ fun DownloadDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                     color = TextDim,
                     fontSize = 13.5.sp,
                 )
+                vm.offlineAgeDays?.let { age ->
+                    Surface(color = SurfaceCard, shape = RoundedCornerShape(12.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                if (age <= 7) "✅ Mapa offline desta semana" else "⚠️ Mapa offline de $age dias atrás",
+                                color = if (age <= 7) NavGreen else WarningColor,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "Ele se atualiza sozinho no Wi-Fi toda semana. Obra nova, pista nova e viaduto novo só entram com a atualização.",
+                                color = TextDim,
+                                fontSize = 12.5.sp,
+                            )
+                            if (prog.pending == 0) Button(onClick = { vm.refreshOfflineNow() }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Atualizar mapa offline agora")
+                            }
+                        }
+                    }
+                }
                 if (prog.pending > 0) {
                     val frac = if (prog.bytesTotal > 0) (prog.bytesDone.toFloat() / prog.bytesTotal).coerceIn(0f, 1f) else 0f
                     Surface(color = SurfaceCard, shape = RoundedCornerShape(12.dp)) {

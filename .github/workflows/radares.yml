@@ -2,7 +2,7 @@ name: Atualizar radares
 
 on:
   schedule:
-    - cron: "0 6 1 * *"   # todo dia 1 do mes
+    - cron: "0 6 * * 1"   # toda segunda-feira
   workflow_dispatch:
 
 permissions:

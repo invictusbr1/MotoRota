@@ -469,6 +469,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) { knownRisksVersion++ }
             radarStore.load()
             withContext(Dispatchers.Main) { radarsVersion++ }
+            // lista de radares da semana + os que a turma marcou
+            if (runCatching { radarStore.refreshOnline() }.getOrDefault(false)) {
+                radarStore.load()
+                withContext(Dispatchers.Main) { radarsVersion++ }
+            }
         }
         // Watchdog: zera velocidade travada se perder GPS (ex.: túnel ou parada completa)
         viewModelScope.launch {
@@ -694,8 +699,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     RiskArea(System.nanoTime(), it.point, 15, "Interditada (TomTom)", System.currentTimeMillis())
                 }
                 val onde = newClosures.firstOrNull { it.where.isNotBlank() }?.where?.let { " ($it)" } ?: ""
-                message = "Via interditada no caminho$onde. Desviando…"
-                if (navigating) say("Via interditada à frente. Recalculando.", urgent = true)
+                message = "⛔ Via interditada no caminho$onde. Desviando…"
+                if (navigating) say("Atenção: via interditada à frente$onde. Já estou desviando.", urgent = true)
                 if (navigating) myLocation?.let { reroute(it) } else recalc(fit = false)
                 return@launch
             }
@@ -885,9 +890,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
         say("Vamos lá. Rota ${r.mode.label.lowercase()}.", urgent = true)
         copilotBriefing(r)
+        startLiveWatch()
+    }
+
+    private var liveWatchJob: Job? = null
+
+    /**
+     * Durante a viagem, a cada 4 min confere de novo as interdições e ocorrências ao vivo (TomTom)
+     * no caminho que falta. Pista fechada de repente = o Jarvis avisa e a rota desvia sozinha.
+     */
+    private fun startLiveWatch() {
+        liveWatchJob?.cancel()
+        liveWatchJob = viewModelScope.launch {
+            while (true) {
+                delay(4 * 60_000L)
+                if (!navigating) break
+                val r = currentRoute ?: continue
+                if (rerouting) continue
+                closureRounds = 0 // nova rodada: pode desviar de interdição nova
+                checkTraffic(r, generation)
+            }
+        }
     }
 
     fun stopNavigation(arrived: Boolean = false) {
+        liveWatchJob?.cancel()
         if (navigating && tripDistM > 300) {
             tripSummary = TripSummary(
                 distM = tripDistM,
@@ -1183,11 +1210,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var refreshChecked = false
 
+    /** Botão "atualizar mapa offline agora": baixa tudo de novo, até nos dados móveis. */
+    fun refreshOfflineNow() {
+        val n = downloader.refreshStale(0, anyNetwork = true)
+        message = if (n > 0) "Baixando a versão desta semana do mapa offline ($n bloco(s))." else "Nenhum mapa offline baixado ainda."
+    }
+
+    val offlineAgeDays get() = downloader.oldestAgeDays()
+
     fun pollDownloads() {
         if (!refreshChecked) {
             refreshChecked = true
-            val n = downloader.refreshStale()
-            if (n > 0) message = "Atualizando $n bloco(s) do mapa offline no Wi-Fi (mais de 30 dias)."
+            Http.report("mapa-offline", "idade dos blocos: ${downloader.ages()}")
+            val n = downloader.refreshStale(7)
+            if (n > 0) message = "Atualizando $n bloco(s) do mapa offline no Wi-Fi (mais de 7 dias)."
         }
         val before = downloadProgress.pending
         downloadProgress = downloader.poll()
@@ -2002,6 +2038,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val added = withContext(Dispatchers.IO) { radarStore.addUser(me, lim) }
         if (!added) return@withContext "Já tenho um radar marcado bem aqui."
         radarsVersion++
+        // vai para a central: os amigos passam a ser avisados desse radar também
+        viewModelScope.launch { runCatching { intercom.reportRadar(me.lat, me.lon, lim) } }
         currentRoute?.let { if (navigating) refreshAlertsAsync(it) }
         "Radar marcado aqui" + (if (lim > 0) ", limite $lim" else "") + ". Vou avisar sempre que passar por ele."
     }

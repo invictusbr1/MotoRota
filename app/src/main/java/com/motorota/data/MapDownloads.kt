@@ -81,7 +81,19 @@ class MapDownloader(private val ctx: Context, private val segmentDir: File) {
      * Mapa offline com mais de 30 dias: baixa de novo (só no Wi-Fi). O brouter.de refaz os blocos
      * toda semana a partir do OpenStreetMap. Retorna quantos blocos entraram na fila.
      */
-    fun refreshStale(maxAgeDays: Int = 30): Int {
+    /** Idade (dias) do bloco de mapa offline mais velho já baixado; null se não tem nenhum. */
+    fun oldestAgeDays(): Int? = segmentDir.listFiles()?.filter { it.name.endsWith(".rd5") && it.length() > 0 }
+        ?.minOfOrNull { it.lastModified() }?.let { ((System.currentTimeMillis() - it) / 86_400_000L).toInt() }
+
+    fun ages(): String = segmentDir.listFiles()?.filter { it.name.endsWith(".rd5") }?.joinToString(", ") {
+        "${it.name.removeSuffix(".rd5")}=${(System.currentTimeMillis() - it.lastModified()) / 86_400_000L}d"
+    }.orEmpty()
+
+    /**
+     * Baixa de novo os blocos com mais de [maxAgeDays] dias (o brouter.de refaz tudo do OpenStreetMap
+     * toda semana). [anyNetwork] = também nos dados móveis (quando o piloto toca em "atualizar agora").
+     */
+    fun refreshStale(maxAgeDays: Int = 7, anyNetwork: Boolean = false): Int {
         val limit = System.currentTimeMillis() - maxAgeDays * 86_400_000L
         val old = segmentDir.listFiles()?.filter { it.name.endsWith(".rd5") && it.length() > 0 && it.lastModified() < limit }
             ?: return 0
@@ -94,7 +106,7 @@ class MapDownloader(private val ctx: Context, private val segmentDir: File) {
                 .setTitle("MotoRota: atualizando mapa $tile")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationInExternalFilesDir(ctx, null, "brouter/segments4/$tile.rd5.part")
-                .setAllowedOverMetered(false)
+                .setAllowedOverMetered(anyNetwork)
                 .setAllowedOverRoaming(false)
             prefs.edit().putLong(tile, dm.enqueue(req)).apply()
             n++

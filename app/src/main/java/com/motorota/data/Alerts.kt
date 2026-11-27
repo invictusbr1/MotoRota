@@ -22,7 +22,9 @@ class RadarStore(private val ctx: Context) {
         val nextGrid = HashMap<Long, MutableList<Radar>>()
         val list = ArrayList<Radar>(12000)
         try {
-            ctx.assets.open("radares.csv").bufferedReader().useLines { lines ->
+            // versão da semana baixada do servidor; se ainda não tem, a que veio com o app
+            val src = if (onlineFile.length() > 100_000) onlineFile.inputStream() else ctx.assets.open("radares.csv")
+            src.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
                     if (line.startsWith("#") || line.isBlank()) return@forEach
                     val p = line.split(',')
@@ -40,8 +42,9 @@ class RadarStore(private val ctx: Context) {
             }
         } catch (_: Exception) {
         }
-        // radares que o piloto marcou (ficam para sempre, somados aos do mapa)
-        for (r in loadUser()) {
+        // radares que o piloto e a turma marcaram (ficam para sempre, somados aos do mapa)
+        for (r in loadUser() + loadCsv(sharedFile)) {
+            if (nextGrid[cell(r.point.lat, r.point.lon)]?.any { it.point.distanceTo(r.point) < 60 } == true) continue
             list.add(r)
             nextGrid.getOrPut(cell(r.point.lat, r.point.lon)) { ArrayList() }.add(r)
         }
@@ -50,6 +53,70 @@ class RadarStore(private val ctx: Context) {
     }
 
     private val userFile get() = java.io.File(ctx.filesDir, "radares_usuario.csv")
+    private val onlineFile get() = java.io.File(ctx.filesDir, "radares_semana.csv")
+    private val sharedFile get() = java.io.File(ctx.filesDir, "radares_turma.csv")
+
+    private fun loadCsv(f: java.io.File): List<Radar> = try {
+        if (!f.exists()) emptyList() else f.readLines().mapNotNull { line ->
+            val p = line.split(',')
+            val lat = p.getOrNull(0)?.toDoubleOrNull() ?: return@mapNotNull null
+            val lon = p.getOrNull(1)?.toDoubleOrNull() ?: return@mapNotNull null
+            Radar(GeoPoint(lat, lon), p.getOrNull(2)?.toIntOrNull() ?: 0, null)
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Radares atualizados: a lista do OpenStreetMap é refeita toda semana no servidor (GitHub) e
+     * os radares que a turma marcou ficam na central. Baixa se a cópia tiver mais de 7 dias.
+     * Devolve true se mudou algo (aí é só chamar load() de novo).
+     */
+    fun refreshOnline(force: Boolean = false): Boolean {
+        var changed = false
+        val week = 7 * 86_400_000L
+        if (force || !onlineFile.exists() || System.currentTimeMillis() - onlineFile.lastModified() > week) {
+            val r = Http.request(
+                "https://raw.githubusercontent.com/invictusbr1/MotoRota/main/app/src/main/assets/radares.csv",
+                readTimeoutMs = 30_000,
+            )
+            if (r.ok && r.text.length > 100_000 && r.text.lines().size > 5_000) {
+                val tmp = java.io.File(ctx.filesDir, "radares_semana.tmp")
+                tmp.writeText(r.text)
+                tmp.renameTo(onlineFile)
+                changed = true
+            }
+        }
+        val s = Http.request(
+            "${com.motorota.intercom.Intercom.SUPABASE_URL}/rest/v1/rpc/listar_radares_reportados", "POST",
+            mapOf(
+                "apikey" to com.motorota.intercom.Intercom.SUPABASE_KEY,
+                "Authorization" to "Bearer ${com.motorota.intercom.Intercom.SUPABASE_KEY}",
+            ),
+            "{}",
+        )
+        if (s.ok) {
+            val arr = runCatching { JSONArray(s.text) }.getOrNull()
+            if (arr != null) {
+                val sb = StringBuilder()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    sb.append(o.optDouble("lat")).append(',').append(o.optDouble("lon")).append(',').append(o.optInt("limite")).append('\n')
+                }
+                if (!sharedFile.exists() || sharedFile.readText() != sb.toString()) {
+                    sharedFile.writeText(sb.toString())
+                    changed = true
+                }
+            }
+        }
+        return changed
+    }
+
+    /** Quantos radares tem e de quando é a lista. */
+    fun info(): String {
+        val days = if (onlineFile.exists()) (System.currentTimeMillis() - onlineFile.lastModified()) / 86_400_000L else -1
+        return "${all.size} radares" + if (days >= 0) " (lista de $days dia(s) atrás)" else " (lista que veio com o app)"
+    }
 
     private fun loadUser(): List<Radar> = try {
         if (!userFile.exists()) emptyList() else userFile.readLines().mapNotNull { line ->
