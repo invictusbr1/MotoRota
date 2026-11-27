@@ -112,68 +112,94 @@ object TomTomRouter {
      * se for bem mais curto e não passar mais por área de risco.
      */
     suspend fun fixDetours(
+        points: List<GeoPoint>,
         base: RouteResult,
         risks: List<RiskArea>,
         known: List<KnownRisk>,
         zones: List<UrbanZone>,
+        corridors: List<com.motorota.data.Corridor>,
     ): RouteResult = withContext(Dispatchers.IO) {
-        val n = base.points.size
-        if (n < 10) return@withContext base
-        // pontos a cada ~200 m
-        val s = ArrayList<Int>()
-        var next = 0.0
-        for (i in 0 until n) if (base.cumDist[i] >= next) { s.add(i); next = base.cumDist[i] + 200 }
-        if (s.last() != n - 1) s.add(n - 1)
-        val found = ArrayList<Pair<Int, Int>>()
-        var k = 0
-        while (k < s.size && found.size < 4) {
-            val a = s[k]
-            var best = -1; var bestWaste = 0.0
-            var m = k + 1
-            while (m < s.size && base.cumDist[s[m]] - base.cumDist[a] <= 40_000) {
-                val b = s[m]
-                val along = base.cumDist[b] - base.cumDist[a]
-                val straight = base.points[a].distanceTo(base.points[b])
-                val waste = along - 1.6 * straight
-                if (straight < 6_000 && along > 2.5 * straight + 3_000 && waste > bestWaste) { best = m; bestWaste = waste }
-                m++
-            }
-            if (best < 0) { k++; continue }
-            found.add(a to s[best])
-            k = best + 1
+        if (base.points.size < 10) return@withContext base
+        // 1) caminho da própria TomTom (mapa novo) para comparar
+        val locs = points.joinToString(":") { String.format(Locale.US, "%.6f,%.6f", it.lat, it.lon) }
+        fun req(travel: String) = Http.request(
+            "https://api.tomtom.com/routing/1/calculateRoute/$locs/json?key=${Keys.tomtom}" +
+                "&travelMode=$travel&routeType=fastest&traffic=false&instructionsType=coded&language=pt-BR" +
+                "&routeRepresentation=polyline&computeTravelTimeFor=none&sectionType=speedLimit",
+            readTimeoutMs = 15_000,
+        )
+        var res = req("motorcycle")
+        if (res.code == 400) res = req("car")
+        if (!res.ok) {
+            Http.report("rota-desvio", "TomTom HTTP ${res.code} ${res.reason()}")
+            return@withContext base
         }
-        if (found.isEmpty()) return@withContext base
+        val tt = parse(base.mode, res.text)
+
+        // 2) trechos onde o caminho seguro sai do caminho da TomTom e depois volta
+        val n = base.points.size
+        val off = BooleanArray(n)
+        val ttIdx = IntArray(n)
+        var hint = 0
+        for (i in 0 until n) {
+            val (d, at) = nearest(tt.points, base.points[i], hint)
+            hint = at
+            ttIdx[i] = at
+            off[i] = d > 120
+        }
+        data class Run(val a: Int, val b: Int)
+        val runs = ArrayList<Run>()
+        var i = 0
+        while (i < n) {
+            if (!off[i]) { i++; continue }
+            var j = i
+            while (j + 1 < n && off[j + 1]) j++
+            if (i > 0 && j < n - 1) runs.add(Run(i - 1, j + 1))
+            i = j + 1
+        }
+        var fixed = 0; var kept = 0
         var out = base
-        var shift = 0 // índices mudam depois de cada troca
-        for ((a0, b0) in found) {
-            val a = a0 + shift; val b = b0 + shift
-            val pa = out.points[a]; val pb = out.points[b]
-            val url = "https://api.tomtom.com/routing/1/calculateRoute/" +
-                String.format(Locale.US, "%.6f,%.6f:%.6f,%.6f", pa.lat, pa.lon, pb.lat, pb.lon) +
-                "/json?key=${Keys.tomtom}&travelMode=car&routeType=fastest&traffic=false&instructionsType=coded" +
-                "&language=pt-BR&routeRepresentation=polyline&computeTravelTimeFor=none&sectionType=speedLimit"
-            val res = Http.request(url, readTimeoutMs = 10_000)
-            if (!res.ok) continue
-            val seg = runCatching { parse(out.mode, res.text) }.getOrNull() ?: continue
-            val oldLen = out.cumDist[b] - out.cumDist[a]
-            val newLen = seg.cumDist.last()
-            val sub = slice(out, a, b)
-            val worse = exposure(seg, known, zones) > exposure(sub, known, zones) + 200 ||
+        // do fim para o começo: os índices do começo não mudam com as trocas
+        for (r in runs.sortedByDescending { it.a }) {
+            val baseLen = base.cumDist[r.b] - base.cumDist[r.a]
+            val ta = ttIdx[r.a]; val tb = ttIdx[r.b] + 1
+            if (tb <= ta + 1 || tb >= tt.points.size) continue
+            val ttLen = tt.cumDist[tb] - tt.cumDist[ta]
+            // só conserta "volta" local (até 30 km) em que o caminho do mapa novo é bem mais curto
+            if (baseLen > 30_000 || baseLen < ttLen * 1.3 + 500) continue
+            val seg = sub(tt, ta, tb)
+            val oldSeg = slice(base, r.a, r.b)
+            val worse = risky(seg, known, zones, corridors) > risky(oldSeg, known, zones, corridors) + 200 ||
                 seg.points.any { p -> risks.any { p.distanceTo(it.point) < it.radiusM } }
-            if (newLen > oldLen * 0.75 || worse) {
-                Http.report("rota-desvio", "mantido laço de ${(oldLen / 1000).toInt()} km (TomTom ${(newLen / 1000).toInt()} km, risco=$worse)")
-                continue
-            }
+            if (worse) { kept++; continue }
+            out = splice(out, r.a, r.b, seg)
+            fixed++
             Http.report(
                 "rota-desvio",
-                String.format(Locale.US, "corrigido laço em %.5f,%.5f: %.1f km -> %.1f km", pa.lat, pa.lon, oldLen / 1000, newLen / 1000),
+                String.format(Locale.US, "corrigido em %.5f,%.5f: %.1f km -> %.1f km", base.points[r.a].lat, base.points[r.a].lon, baseLen / 1000, ttLen / 1000),
             )
-            val before = out.points.size
-            out = splice(out, a, b, seg)
-            shift += out.points.size - before
         }
+        Http.report("rota-desvio", "${base.mode.label}: ${runs.size} diferenças, $fixed corrigidas, $kept mantidas por segurança")
         out
     }
+
+    /** Pedaço a..b de uma rota, recomeçando distância/tempo/manobras do zero. */
+    private fun sub(r: RouteResult, a: Int, b: Int): RouteResult {
+        val pts = r.points.subList(a, b + 1)
+        val cum = DoubleArray(pts.size) { r.cumDist[a + it] - r.cumDist[a] }
+        val time = FloatArray(pts.size) { r.cumTime[a + it] - r.cumTime[a] }
+        val dA = r.cumDist[a]; val dB = r.cumDist[b]
+        return r.copy(
+            points = pts, cumDist = cum, cumTime = time,
+            distanceM = cum.last().toInt(), timeS = time.last().toInt(),
+            hints = r.hints.filter { it.index in (a + 1)..b }.map { it.copy(index = it.index - a) },
+            speedLimits = r.speedLimits.filter { it.endM > dA && it.startM < dB }
+                .map { SpeedSegment((it.startM - dA).coerceAtLeast(0.0), (it.endM - dA).coerceAtMost(dB - dA), it.kmh) },
+        )
+    }
+
+    private fun risky(r: RouteResult, known: List<KnownRisk>, zones: List<UrbanZone>, corridors: List<com.motorota.data.Corridor>): Double =
+        exposure(r, known, zones) + runCatching { com.motorota.data.Corridors.hits(r, corridors).sumOf { it.lengthM } }.getOrDefault(0.0)
 
     private fun slice(r: RouteResult, a: Int, b: Int): RouteResult {
         val pts = r.points.subList(a, b + 1)
@@ -244,7 +270,7 @@ object TomTomRouter {
     /** distância até o ponto mais próximo do caminho, procurando perto do último achado (é tudo na mesma ordem) */
     private fun nearest(path: List<GeoPoint>, p: GeoPoint, hint: Int): Pair<Double, Int> {
         var best = Double.MAX_VALUE; var at = hint
-        val from = (hint - 400).coerceAtLeast(0); val to = (hint + 1500).coerceAtMost(path.size - 1)
+        val from = (hint - 400).coerceAtLeast(0); val to = (hint + 3000).coerceAtMost(path.size - 1)
         fun scan(a: Int, b: Int) {
             for (j in a until b) {
                 val d = segDist(p, path[j], path[j + 1])
@@ -252,7 +278,7 @@ object TomTomRouter {
             }
         }
         scan(from, to)
-        if (best > 300) scan(0, path.size - 1) // perdeu a referência: procura no caminho todo
+        if (best > 2000) scan(0, path.size - 1) // perdeu a referência: procura no caminho todo
         return best to at
     }
 

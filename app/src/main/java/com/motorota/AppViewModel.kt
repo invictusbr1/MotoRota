@@ -245,7 +245,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (freshMapOn && tt.available) {
                 // mapa offline desatualizado (obra/pista nova) faz o BRouter dar "volta esquisita": conserta pelo mapa novo
                 try {
-                    base = tt.fixDetours(base, blocked(), known(), zones())
+                    base = tt.fixDetours(pts, base, blocked(), known(), zones(), corridors())
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Throwable) {
