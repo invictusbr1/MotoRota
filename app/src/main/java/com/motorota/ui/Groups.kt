@@ -61,12 +61,25 @@ fun GroupsCard(vm: AppViewModel) {
                 fontSize = 12.5.sp,
                 lineHeight = 17.sp,
             )
+            if (ic.requests.isNotEmpty()) {
+                Text("Pedidos de amizade", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                ic.requests.forEach { r ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("👋 ${r.name}", color = Color.White, fontSize = 14.5.sp, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(onClick = { ic.declineRequest(r.id) }) { Text("Recusar", color = TextDim) }
+                        Button(onClick = { vm.message = ic.acceptRequest(r.id) }) { Text("Aceitar") }
+                    }
+                }
+            }
             if (ic.pendingOut > 0) Text("⏳ ${ic.pendingOut} recado(s) esperando internet para sair", color = WarningColor, fontSize = 12.5.sp)
             ic.groups.forEach { g ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(g.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                         Text(g.members.joinToString(", ") { it.name }, color = TextDim, fontSize = 12.5.sp)
+                    }
+                    androidx.compose.material3.TextButton(onClick = { vm.message = ic.callGroup(g) }, enabled = !ic.busy) {
+                        Text("📞 Conversa", color = Color(0xFF34D399))
                     }
                     IconButton(onClick = { ic.deleteGroup(g.id) }) {
                         Icon(Icons.Rounded.DeleteOutline, "Apagar grupo ${g.name}", tint = TextDim)

@@ -1695,12 +1695,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         },
         Tool(
             "chamar_piloto",
-            "Liga pelo intercomunicador do app para um amigo da lista (o celular dele toca e o Jarvis dele pergunta se pode atender).",
-            mapOf("nome" to ("STRING" to "nome do amigo, como o piloto falou")),
+            "Liga pelo intercomunicador do app para um amigo da lista (o celular dele toca e o Jarvis dele pergunta se pode atender). " +
+                "Se for o nome de um GRUPO, abre a conversa do grupo: todos falam e ouvem todos, como rádio de comboio.",
+            mapOf("nome" to ("STRING" to "nome do amigo ou do grupo, como o piloto falou")),
             listOf("nome"),
         ) { a ->
             withContext(Dispatchers.Main) {
                 val ic = intercom
+                ic.findGroup(a.optString("nome"))?.let { g -> return@withContext ic.callGroup(g) }
                 val f = ic.findFriend(a.optString("nome"))
                 if (f == null) {
                     val lista = ic.friends.joinToString(", ") { it.name }

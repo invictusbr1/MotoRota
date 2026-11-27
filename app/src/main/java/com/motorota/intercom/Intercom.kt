@@ -88,6 +88,10 @@ class Intercom(
     /** alguém está falando agora (para piscar o ícone) */
     var peerTalking by mutableStateOf(false); private set
 
+    /** chamada em grupo: nome do grupo e quem está na conversa (id -> nome) */
+    var groupName by mutableStateOf<String?>(null); private set
+    var participants by mutableStateOf<Map<String, String>>(emptyMap()); private set
+
     private var peerId = ""
     private var callId = ""
     private var acked = false
@@ -155,6 +159,44 @@ class Intercom(
     }
 
     /** Manda um recado para um amigo ou grupo. Sem internet, guarda e envia assim que voltar. */
+    // ---------- Pedidos de amizade ----------
+
+    var requests by mutableStateOf(loadRequests()); private set
+
+    private fun loadRequests(): List<Friend> {
+        val arr = runCatching { JSONArray(prefs.getString("pedidos", "[]")) }.getOrNull() ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { Friend(it.optString("id"), it.optString("nome")) } }
+    }
+
+    private fun saveRequests() {
+        val arr = JSONArray()
+        requests.forEach { arr.put(JSONObject().put("id", it.id).put("nome", it.name)) }
+        prefs.edit().putString("pedidos", arr.toString()).apply()
+    }
+
+    fun acceptRequest(id: String): String {
+        val r = requests.firstOrNull { it.id == id } ?: return "Esse pedido não existe mais."
+        requests = requests.filter { it.id != id }
+        saveRequests()
+        friends = friends.filter { it.id != id } + r
+        saveFriends()
+        queueRecado(listOf(id), "aceitou seu pedido", JSONObject().put("amizade", "aceito"))
+        return "${r.name} agora está nos seus amigos."
+    }
+
+    fun declineRequest(id: String) {
+        requests = requests.filter { it.id != id }
+        saveRequests()
+    }
+
+    private fun queueRecado(ids: List<String>, text: String, extra: JSONObject) {
+        if (ids.isEmpty()) return
+        val box = prefsOutbox()
+        box.put(JSONObject().put("para", JSONArray(ids)).put("texto", text).put("extra", extra))
+        saveOutbox(box)
+        scope.launch { flushOutbox() }
+    }
+
     fun sendRecado(toFriend: Friend?, toGroup: Group?, text: String, notice: Boolean = false): String {
         if (myName.isBlank()) return "Antes, coloque seu nome no MotoRota."
         val t = text.trim().take(500)
@@ -228,6 +270,32 @@ class Intercom(
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val from = o.optString("de")
+            when (o.optJSONObject("extra")?.optString("amizade")) {
+                "pedido" -> {
+                    val name = o.optString("de_nome").ifBlank { "Um piloto" }
+                    if (friends.any { it.id == from }) {
+                        // já é meu amigo: confirma na hora
+                        queueRecado(listOf(from), "aceitou seu pedido", JSONObject().put("amizade", "aceito"))
+                    } else if (requests.none { it.id == from }) {
+                        requests = requests + Friend(from, name)
+                        saveRequests()
+                        notify("👋 $name quer te adicionar no intercomunicador. Abra o menu para aceitar.")
+                        scope.launch {
+                            val yes = askYesNo("${myName.ifBlank { "Piloto" }}, o $name quer te adicionar no intercomunicador. Aceito?")
+                            if (yes == true) notify(acceptRequest(from))
+                            else if (yes == false) declineRequest(from)
+                        }
+                    }
+                    continue
+                }
+                "aceito" -> {
+                    val name = friends.firstOrNull { it.id == from }?.name ?: o.optString("de_nome")
+                    if (friends.none { it.id == from }) { friends = friends + Friend(from, name); saveFriends() }
+                    notify("✅ $name aceitou seu pedido no intercomunicador.")
+                    scope.launch { speak("O $name aceitou seu pedido. Já dá para chamar ele pelo intercomunicador.") }
+                    continue
+                }
+            }
             var gName: String? = null
             o.optJSONObject("extra")?.optJSONObject("grupo")?.let { g ->
                 gName = g.optString("nome").takeIf { it.isNotBlank() }
@@ -334,7 +402,9 @@ class Intercom(
         val name = nickname.trim().ifBlank { o.optString("nome") }.take(40)
         friends = friends.filter { it.id != id } + Friend(id, name)
         saveFriends()
-        return "$name adicionado. Diga \"Jarvis, chama o $name\"."
+        // pedido de amizade: o outro só toca em "Aceitar" (não precisa digitar o seu código)
+        queueRecado(listOf(id), "quer te adicionar no intercomunicador", JSONObject().put("amizade", "pedido"))
+        return "$name adicionado. Mandei o pedido para ele aceitar no MotoRota dele."
     }
 
     fun removeFriend(id: String) {
@@ -395,6 +465,78 @@ class Intercom(
             if (state == CallState.CALLING) finish("${f.name} não atendeu.", tellPeer = "cancel")
         }
         return "Chamando ${f.name}."
+    }
+
+    // ---------- Chamada em grupo ----------
+
+    /**
+     * Abre a conversa do grupo: todo mundo fala e ouve todo mundo (como rádio de comboio).
+     * Cada amigo do grupo recebe o convite e o Jarvis dele pergunta se pode entrar.
+     */
+    fun callGroup(g: Group): String {
+        if (myName.isBlank()) return "Antes, coloque seu nome em Ajustes, Intercomunicador."
+        if (busy) return "Já estou numa chamada."
+        if (!hasMic()) return "Preciso da permissão do microfone."
+        if (!online) {
+            start()
+            return "Estou sem conexão com a central agora. Confira a internet."
+        }
+        callId = "g-" + UUID.randomUUID().toString()
+        groupName = g.name
+        peerId = ""
+        peerName = "Grupo ${g.name}"
+        participants = emptyMap()
+        startAudio()
+        val members = JSONArray().apply {
+            put(JSONObject().put("id", myId).put("nome", myName))
+            g.members.forEach { put(JSONObject().put("id", it.id).put("nome", it.name)) }
+        }
+        for (m in g.members) {
+            if (m.id == myId) continue
+            val ch = myChannel(m.id)
+            rt.join(ch)
+            scope.launch {
+                delay(500)
+                val p = JSONObject().put("to", m.id).put("from", myId).put("call", callId).put("nome", myName)
+                    .put("grupo", JSONObject().put("id", g.id).put("nome", g.name).put("membros", members))
+                if (!rt.broadcast(ch, "gring", p)) { delay(700); rt.broadcast(ch, "gring", p) }
+                delay(3000)
+                rt.leave(ch)
+            }
+        }
+        val myCall = callId
+        scope.launch {
+            delay(45_000)
+            if (callId == myCall && groupName != null && participants.isEmpty() && state == CallState.IN_CALL) {
+                finish("Ninguém do grupo ${g.name} entrou. Fechei a conversa.")
+            }
+        }
+        return "Abri a conversa do grupo ${g.name}. Chamei ${g.members.size} piloto(s); quem aceitar entra na hora."
+    }
+
+    private fun onGroupRing(from: String, name: String, call: String, g: JSONObject) {
+        adoptGroup(g)
+        val gname = g.optString("nome").ifBlank { "do comboio" }
+        if (busy) return
+        scope.launch {
+            ringJob?.cancel()
+            ringJob = scope.launch { ringTone() }
+            val who = friends.firstOrNull { it.id == from }?.name ?: name.ifBlank { "Um piloto" }
+            val yes = askYesNo("${myName.ifBlank { "Piloto" }}, o $who abriu a conversa do grupo $gname. Entro?")
+            ringJob?.cancel()
+            if (yes != true || busy) return@launch
+            if (!hasMic()) { notify("Preciso da permissão do microfone."); return@launch }
+            callId = call
+            groupName = gname
+            peerId = ""
+            peerName = "Grupo $gname"
+            participants = mapOf(from to who)
+            startAudio()
+        }
+    }
+
+    private fun hello(reply: Boolean) {
+        rt.broadcast(callChannel(), "oi", JSONObject().put("f", myId).put("nome", myName).put("r", reply))
     }
 
     // ---------- Chamada: quem recebe ----------
@@ -467,7 +609,25 @@ class Intercom(
 
     private fun onRealtime(channel: String, event: String, p: JSONObject) {
         if (channel.startsWith("chamada:")) {
-            if (event == "a" && channel == callChannel() && p.optString("f") != myId) onAudio(p.optString("d"))
+            val f = p.optString("f")
+            if (channel == callChannel() && f != myId && groupName != null) {
+                when (event) {
+                    "oi" -> {
+                        val nome = friends.firstOrNull { it.id == f }?.name ?: p.optString("nome")
+                        val isNew = f !in participants
+                        participants = participants + (f to nome)
+                        if (isNew && !p.optBoolean("r")) {
+                            hello(true) // responde para quem chegou saber que estou aqui
+                            notify("🎙️ $nome entrou na conversa do grupo.")
+                        }
+                    }
+                    "tchau" -> {
+                        participants[f]?.let { notify("$it saiu da conversa do grupo.") }
+                        participants = participants - f
+                    }
+                }
+            }
+            if (event == "a" && channel == callChannel() && f != myId) onAudio(p.optString("d"), f)
             return
         }
         if (p.optString("to") != myId) return // mensagem para outro piloto no mesmo canal
@@ -478,6 +638,7 @@ class Intercom(
         val from = p.optString("from")
         val call = p.optString("call")
         when (event) {
+            "gring" -> p.optJSONObject("grupo")?.let { onGroupRing(from, p.optString("nome"), call, it) }
             "ring" -> onRing(from, p.optString("nome"), call)
             "ringing" -> if (call == callId) acked = true
             "accept" -> if (call == callId && state == CallState.CALLING) startAudio()
@@ -500,6 +661,9 @@ class Intercom(
     }
 
     private fun finish(msg: String, tellPeer: String? = null, speakIt: Boolean = true) {
+        if (groupName != null && running) rt.broadcast(callChannel(), "tchau", JSONObject().put("f", myId))
+        groupName = null
+        participants = emptyMap()
         if (tellPeer != null && peerId.isNotBlank()) send(peerId, tellPeer, JSONObject())
         timeoutJob?.cancel()
         ringJob?.cancel()
@@ -525,7 +689,8 @@ class Intercom(
     @Volatile private var micPaused = false
     private var recThread: Thread? = null
     private var playThread: Thread? = null
-    private val playQueue = LinkedBlockingQueue<ShortArray>()
+    /** uma fila por pessoa falando (no grupo, as vozes são misturadas) */
+    private val playQueues = java.util.concurrent.ConcurrentHashMap<String, LinkedBlockingQueue<ShortArray>>()
     private var feeder: com.motorota.assistant.WakeWord.Feeder? = null
 
     private fun startAudio() {
@@ -539,7 +704,7 @@ class Intercom(
         feeder = wakeFeeder()
         running = true
         micPaused = false
-        playQueue.clear()
+        playQueues.clear()
         recThread = Thread(::recordLoop, "intercom-mic").also { it.start() }
         playThread = Thread(::playLoop, "intercom-som").also { it.start() }
         scope.launch {
@@ -549,7 +714,12 @@ class Intercom(
                 delay(200)
             }
         }
-        notify("Falando com $peerName. Diga \"Jarvis, desliga\" para encerrar.")
+        if (groupName != null) {
+            scope.launch { delay(800); hello(false) }
+            notify("Conversa do grupo $groupName aberta. Diga \"Jarvis, desliga\" para sair.")
+        } else {
+            notify("Falando com $peerName. Diga \"Jarvis, desliga\" para encerrar.")
+        }
     }
 
     private fun stopAudio() {
@@ -648,12 +818,28 @@ class Intercom(
         }
     }
 
-    private fun onAudio(b64: String) {
+    private fun onAudio(b64: String, from: String) {
         if (b64.isEmpty() || !running) return
         val pcm = runCatching { Adpcm.decode(Base64.decode(b64, Base64.NO_WRAP)) }.getOrNull() ?: return
         lastPeerAudio = SystemClock.elapsedRealtime()
-        if (playQueue.size > 8) playQueue.poll() // não deixa o atraso crescer
-        playQueue.offer(pcm)
+        val q = playQueues.getOrPut(from) { LinkedBlockingQueue() }
+        if (q.size > 8) q.poll() // não deixa o atraso crescer
+        q.offer(pcm)
+    }
+
+    /** Pega um pedaço de cada pessoa que está falando e soma (com limite para não estourar). */
+    private fun nextMixed(): ShortArray? {
+        val frames = playQueues.values.mapNotNull { it.poll() }
+        if (frames.isEmpty()) return null
+        if (frames.size == 1) return frames[0]
+        val n = frames.maxOf { it.size }
+        val out = ShortArray(n)
+        for (i in 0 until n) {
+            var s = 0
+            for (f in frames) if (i < f.size) s += f[i]
+            out[i] = s.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return out
     }
 
     private fun playLoop() {
@@ -684,7 +870,11 @@ class Intercom(
         try {
             track.play()
             while (running) {
-                val pcm = playQueue.poll(300, TimeUnit.MILLISECONDS) ?: continue
+                val pcm = nextMixed()
+                if (pcm == null) {
+                    Thread.sleep(15)
+                    continue
+                }
                 track.write(pcm, 0, pcm.size)
             }
         } catch (_: InterruptedException) {

@@ -65,7 +65,10 @@ fun IntercomBar(vm: AppViewModel, withMic: (() -> Unit) -> Unit, modifier: Modif
             CallState.RINGING -> "${ic.peerName} quer falar com você"
             CallState.IN_CALL -> {
                 val s = ((now - ic.callStartedAt) / 1000).coerceAtLeast(0)
-                "${ic.peerName} · %d:%02d".format(s / 60, s % 60)
+                val who = if (ic.groupName != null) {
+                    if (ic.participants.isEmpty()) " (esperando o pessoal)" else " (${ic.participants.values.joinToString(", ")})"
+                } else ""
+                "${ic.peerName}$who · %d:%02d".format(s / 60, s % 60)
             }
             CallState.IDLE -> ""
         }
