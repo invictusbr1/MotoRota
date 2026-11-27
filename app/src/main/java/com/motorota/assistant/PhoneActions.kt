@@ -160,6 +160,7 @@ class PhoneActions(private val ctx: Context) {
         if (pkg != null) i.setPackage(pkg)
         if (!start(i)) return "Não consegui abrir o WhatsApp."
         WhatsAppSender.armFor(message)
+        com.motorota.data.Http.report("whatsapp", "abrindo conversa; acessibilidade ligada=${WhatsAppSender.enabled(ctx)}")
         return if (WhatsAppSender.enabled(ctx)) "Mandando para ${c.name} no WhatsApp."
         else "Abri a conversa com ${c.name} com a mensagem pronta; é só tocar em enviar. Para eu enviar sozinho, ative o MotoRota em Acessibilidade."
     }
@@ -219,15 +220,50 @@ class PhoneActions(private val ctx: Context) {
             confirmPlaying(q, 0)
             return "Tocando $q."
         }
+        com.motorota.data.Http.report(
+            "jarvis-musica",
+            "pedido \"$q\": notif=${notificationsAllowed()} sessoes=${before.map { "${it.packageName}:${it.playbackState?.state}:${canSearch(it)}" }}",
+        )
+        if (isInstalled(SPOTIFY) && notificationsAllowed()) {
+            // Spotify fechado: abre ele, espera a "sessão de música" dele aparecer e manda a busca por ela
+            ctx.packageManager.getLaunchIntentForPackage(SPOTIFY)?.let { start(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            waitSessionThenPlay(q, 0)
+            return "Abrindo o Spotify e tocando $q."
+        }
         val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
             .putExtra(SearchManager.QUERY, q)
             .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
         if (isInstalled(SPOTIFY)) i.setPackage(SPOTIFY)
         if (!start(i)) return "Não achei um app de música que aceite pedido por voz."
-        // o Spotify frio às vezes abre sem tocar: vai conferindo e insiste no play pela sessão dele
         confirmPlaying(q, 1)
         returnToApp(6000)
-        return "Tocando $q."
+        return if (notificationsAllowed()) "Tocando $q." else
+            "Abri o Spotify. Para eu tocar a música sozinho, ligue o acesso a notificações do MotoRota."
+    }
+
+    /** espera até 10 s o Spotify aparecer como player e então toca a busca; depois volta para o mapa */
+    private fun waitSessionThenPlay(q: String, tries: Int) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val c = players().firstOrNull { it.packageName == SPOTIFY }
+            when {
+                c != null && canSearch(c) -> {
+                    c.transportControls.playFromSearch(q, android.os.Bundle())
+                    confirmPlaying(q, 1)
+                    returnToApp(2500)
+                }
+                tries < 10 -> waitSessionThenPlay(q, tries + 1)
+                else -> {
+                    // não apareceu: tenta o pedido "tocar busca" direto no app e o play
+                    val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+                        .putExtra(SearchManager.QUERY, q)
+                        .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                        .setPackage(SPOTIFY)
+                    start(i)
+                    confirmPlaying(q, 1)
+                    returnToApp(5000)
+                }
+            }
+        }, 1000)
     }
 
     /** Confere de 1,5 em 1,5 s se começou a tocar; senão manda de novo (pela sessão ou tecla de play). */

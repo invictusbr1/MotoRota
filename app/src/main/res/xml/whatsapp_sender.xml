@@ -3,6 +3,7 @@
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:notificationTimeout="200"
     android:packageNames="com.whatsapp,com.whatsapp.w4b"
     android:description="@string/acessibilidade_descricao" />
