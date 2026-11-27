@@ -151,56 +151,63 @@ object TomTomRouter {
             return@withContext tt.copy(note = base.note)
         }
 
-        // 3) trechos onde o caminho seguro sai do caminho da TomTom e depois volta
+        // 3) janelas de ~25 km: onde o caminho offline "enrola" (anda bem mais que a distância em linha reta),
+        //    pergunta à TomTom o caminho entre o início e o fim da janela e troca se for bem mais curto e não mais arriscado.
         val n = base.points.size
-        val off = BooleanArray(n)
-        val ttIdx = IntArray(n)
-        var hint = 0
-        for (i in 0 until n) {
-            val (d, at) = nearest(tt.points, base.points[i], hint)
-            hint = at
-            ttIdx[i] = at
-            off[i] = d > 120
-        }
-        data class Run(val a: Int, val b: Int)
-        val runs = ArrayList<Run>()
-        var i = 0
-        while (i < n) {
-            if (!off[i]) { i++; continue }
-            var j = i
-            while (j + 1 < n && off[j + 1]) j++
-            if (i > 0 && j < n - 1) runs.add(Run(i - 1, j + 1))
-            i = j + 1
-        }
-        var fixed = 0; var kept = 0
-        var out = base
-        // do fim para o começo: os índices do começo não mudam com as trocas
-        for (r in runs.sortedByDescending { it.a }) {
-            val baseLen = base.cumDist[r.b] - base.cumDist[r.a]
-            val ta = ttIdx[r.a]; val tb = ttIdx[r.b] + 1
-            if (tb <= ta + 1 || tb >= tt.points.size) continue
-            val ttLen = tt.cumDist[tb] - tt.cumDist[ta]
-            // só conserta "volta" local (até 30 km) em que o caminho do mapa novo é bem mais curto
-            if (baseLen > 30_000 || baseLen < ttLen * 1.3 + 500) {
-                Http.report("rota-desvio", String.format(Locale.US, "diferença em %.5f,%.5f: offline %.1f km x novo %.1f km (não trocou)",
-                    base.points[r.a].lat, base.points[r.a].lon, baseLen / 1000, ttLen / 1000))
-                continue
-            }
-            val seg = sub(tt, ta, tb)
-            val oldSeg = slice(base, r.a, r.b)
-            val worse = risky(seg, known, zones, corridors) > risky(oldSeg, known, zones, corridors) + 200 ||
+        val starts = ArrayList<Int>()
+        var nextStart = 0.0
+        for (i in 0 until n) if (base.cumDist[i] >= nextStart) { starts.add(i); nextStart = base.cumDist[i] + 8_000 }
+        data class Fix(val a: Int, val b: Int, val seg: RouteResult, val saved: Double)
+        val fixes = ArrayList<Fix>()
+        var asked = 0
+        // as janelas que mais "enrolam" primeiro (no máximo 12 consultas por rota)
+        val cands = starts.mapNotNull { a ->
+            var b = a
+            while (b < n - 1 && base.cumDist[b] - base.cumDist[a] < 25_000) b++
+            val along = base.cumDist[b] - base.cumDist[a]
+            val straight = base.points[a].distanceTo(base.points[b])
+            if (along < 3_000 || along < straight * 1.22) null else Triple(a, b, along / straight.coerceAtLeast(1.0))
+        }.sortedByDescending { it.third }.take(12)
+        for ((a, b, _) in cands) {
+            val along = base.cumDist[b] - base.cumDist[a]
+            if (fixes.any { a < it.b && b > it.a }) continue
+            asked++
+            val seg = windowRoute(base.mode, base.points[a], base.points[b]) ?: continue
+            val newLen = seg.cumDist.last()
+            val saved = along - newLen
+            if (newLen > along * 0.85 || saved < 1_500) continue
+            val worse = risky(seg, known, zones, corridors) > risky(slice(base, a, b), known, zones, corridors) + 200 ||
                 seg.points.any { p -> risks.any { p.distanceTo(it.point) < it.radiusM } }
-            if (worse) { kept++; continue }
-            out = splice(out, r.a, r.b, seg)
-            fixed++
             Http.report(
                 "rota-desvio",
-                String.format(Locale.US, "corrigido em %.5f,%.5f: %.1f km -> %.1f km", base.points[r.a].lat, base.points[r.a].lon, baseLen / 1000, ttLen / 1000),
+                String.format(Locale.US, "janela em %.5f,%.5f: offline %.1f km x novo %.1f km%s",
+                    base.points[a].lat, base.points[a].lon, along / 1000, newLen / 1000, if (worse) " (mais risco: mantida)" else " (trocada)"),
             )
+            if (!worse) fixes.add(Fix(a, b, seg, saved))
         }
-        Http.report("rota-desvio", "${base.mode.label}: mapa novo mais arriscado (risco ${rTt.toInt()} x ${rBase.toInt()} m, bloqueada=$blockedHit); " +
-            "${runs.size} diferenças, $fixed corrigidas, $kept mantidas por segurança")
+        var out = base
+        for (f in fixes.sortedByDescending { it.a }) out = splice(out, f.a, f.b, f.seg)
+        Http.report("rota-desvio", "${base.mode.label}: mapa novo inteiro mais arriscado (${rTt.toInt()} x ${rBase.toInt()} m); " +
+            "$asked janelas conferidas, ${fixes.size} trocadas")
         out
+    }
+
+    private val windowCache = java.util.concurrent.ConcurrentHashMap<String, RouteResult>()
+
+    /** Caminho da TomTom entre dois pontos (com cache: os 3 modos costumam ter as mesmas janelas). */
+    private fun windowRoute(mode: Mode, pa: GeoPoint, pb: GeoPoint): RouteResult? {
+        val key = String.format(Locale.US, "%.4f,%.4f:%.4f,%.4f", pa.lat, pa.lon, pb.lat, pb.lon)
+        windowCache[key]?.let { return it.copy(mode = mode) }
+        val url = "https://api.tomtom.com/routing/1/calculateRoute/" +
+            String.format(Locale.US, "%.6f,%.6f:%.6f,%.6f", pa.lat, pa.lon, pb.lat, pb.lon) +
+            "/json?key=${Keys.tomtom}&travelMode=car&routeType=fastest&traffic=false&instructionsType=coded" +
+            "&language=pt-BR&routeRepresentation=polyline&computeTravelTimeFor=none&sectionType=speedLimit"
+        val res = Http.request(url, readTimeoutMs = 10_000)
+        if (!res.ok) return null
+        val r = runCatching { parse(mode, res.text) }.getOrNull() ?: return null
+        if (windowCache.size > 200) windowCache.clear()
+        windowCache[key] = r
+        return r
     }
 
     /** Pedaço a..b de uma rota, recomeçando distância/tempo/manobras do zero. */
