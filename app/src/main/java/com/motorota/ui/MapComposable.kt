@@ -227,7 +227,7 @@ fun MapLibreMapView(
                 vm.myLocation?.let {
                     m.animateCamera(
                         CameraUpdateFactory.newCameraPosition(
-                            CameraPosition.Builder().target(LatLng(it.lat, it.lon)).zoom(currentZoom).tilt(55.0).build()
+                            CameraPosition.Builder().target(LatLng(it.lat, it.lon)).zoom(currentZoom).tilt(38.0).build()
                         )
                     )
                 }
@@ -354,14 +354,16 @@ private fun minRouteDist(pts: List<GeoPoint>, p: GeoPoint): Double {
 private fun follow(m: MapLibreMap, zoom: Double) {
     val lc = m.locationComponent
     val h = m.height.toDouble().takeIf { it > 0 } ?: 1600.0
-    m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.44, 0.0, h * 0.20))
+    // visão estilo Waze: seta um pouco abaixo do meio, pouca inclinação, enxerga mais à frente e dos lados
+    m.moveCamera(CameraUpdateFactory.paddingTo(0.0, h * 0.30, 0.0, h * 0.12))
     lc.cameraMode = CameraMode.TRACKING_GPS
-    lc.tiltWhileTracking(60.0)
+    lc.tiltWhileTracking(38.0)
     lc.zoomWhileTracking(zoom)
 }
 
 private fun navZoom(speedKmh: Int, distToManeuverM: Double?): Double {
-    val base = 17.6 - ((speedKmh - 30).coerceIn(0, 80) / 80.0) * 1.2
-    val nearTurn = distToManeuverM != null && distToManeuverM < 350
-    return (base + if (nearTurn) 0.8 else 0.0).coerceAtMost(18.4)
+    // mais aberto (estilo Waze): cidade ~16,6; estrada rápida ~15,4; chegando na curva aproxima um pouco
+    val base = 16.6 - ((speedKmh - 30).coerceIn(0, 80) / 80.0) * 1.2
+    val nearTurn = distToManeuverM != null && distToManeuverM < 300
+    return (base + if (nearTurn) 0.6 else 0.0).coerceAtMost(17.3)
 }

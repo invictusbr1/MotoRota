@@ -78,7 +78,7 @@ class Brain(private val tools: List<Tool>) {
 
     /** Guarda só o texto da conversa (últimas trocas) para o Jarvis lembrar do contexto. */
     private fun remember(user: String, reply: String) {
-        history.add(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", user))))
+        history.add(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", "[às ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date())}] $user"))))
         history.add(JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", reply.ifBlank { "ok" }))))
         while (history.size > 16) history.removeAt(0)
     }

@@ -58,7 +58,8 @@ class GroqBrain(private val tools: List<Tool>) {
     }
 
     private fun remember(user: String, reply: String) {
-        history.add(JSONObject().put("role", "user").put("content", user))
+        // marca a hora: o modelo sabe que a resposta antiga pode estar velha (radares, distância...)
+        history.add(JSONObject().put("role", "user").put("content", "[às ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date())}] $user"))
         history.add(JSONObject().put("role", "assistant").put("content", reply.ifBlank { "ok" }))
         while (history.size > 16) history.removeAt(0)
     }
