@@ -1,0 +1,14 @@
+name: Teste ANP
+on:
+  workflow_dispatch:
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          U="https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-do-precos-de-combustiveis-ultimas-semanas-pesquisadas"
+          curl -sL -A "Mozilla/5.0" "$U" -o p.html; wc -c p.html
+          grep -o 'href="[^"]*\.xlsx[^"]*"' p.html | head -20
+          U2="https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-de-precos-de-combustiveis-ultimas-semanas-pesquisadas"
+          curl -sL -A "Mozilla/5.0" "$U2" -o p2.html; wc -c p2.html
+          grep -o 'href="[^"]*\.xlsx[^"]*"' p2.html | head -20
