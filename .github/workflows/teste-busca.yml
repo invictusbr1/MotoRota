@@ -7,16 +7,13 @@ jobs:
   teste:
     runs-on: ubuntu-latest
     steps:
-      - name: Gemini + Busca Google
+      - name: Groq compound (busca na web)
         env:
-          K: ${{ secrets.GEMINI_KEY }}
+          K: ${{ secrets.GROQ_KEY }}
         run: |
-          for m in gemini-flash-lite-latest gemini-3.5-flash-lite gemini-2.5-flash; do
+          for m in groq/compound-mini groq/compound; do
             echo "== $m"
-            curl -s "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent" \
-              -H "x-goog-api-key: $K" -H "Content-Type: application/json" \
-              -d '{"contents":[{"role":"user","parts":[{"text":"Encontre o lugar pedido por voz: \"Sabenalto GM Duque de Caxias\". O piloto esta perto de -22.6435,-43.3379. Pesquise no Google e responda SOMENTE JSON {\"nome\":\"\",\"endereco\":\"\",\"lat\":0,\"lon\":0,\"achou\":true}"}]}],"tools":[{"google_search":{}}]}' \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('error') or [p.get('text') for p in d['candidates'][0]['content']['parts']], ensure_ascii=False)[:800])"
+            curl -s https://api.groq.com/openai/v1/chat/completions -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+              -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"Encontre o estabelecimento pedido por voz: 'Sabenalto GM Duque de Caxias' (o nome pode ter erro de voz). O piloto esta perto de -22.6435,-43.3379, Brasil. Pesquise na web e responda SOMENTE JSON {\\\"nome\\\":\\\"\\\",\\\"endereco\\\":\\\"rua, numero, bairro, cidade, UF\\\",\\\"lat\\\":0,\\\"lon\\\":0,\\\"achou\\\":true}\"}]}" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print((json.dumps(d.get('error'),ensure_ascii=False) if 'error' in d else d['choices'][0]['message']['content'])[:700])"
           done
-          echo "== sem busca (controle)"
-          curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent" -H "x-goog-api-key: $K" -H "Content-Type: application/json" -d '{"contents":[{"role":"user","parts":[{"text":"diga oi"}]}]}' | head -c 300
