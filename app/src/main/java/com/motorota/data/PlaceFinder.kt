@@ -25,6 +25,7 @@ class PlaceFinder(ctx: Context) {
     data class Saved(val name: String, val detail: String, val point: GeoPoint, val aliases: List<String>, val used: Long)
 
     private var saved: MutableList<Saved> = load()
+    @Volatile private var webBlockedUntil = 0L
 
     private fun norm(s: String) = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "").replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
@@ -74,7 +75,7 @@ class PlaceFinder(ctx: Context) {
      */
     suspend fun webSearch(query: String, near: GeoPoint?): Place? = withContext(Dispatchers.IO) {
         val key = Keys.gemini
-        if (key.isBlank()) return@withContext null
+        if (key.isBlank() || System.currentTimeMillis() < webBlockedUntil) return@withContext null
         val whereTxt = near?.let { String.format(Locale.US, "O piloto está agora perto de %.5f, %.5f (Brasil).", it.lat, it.lon) } ?: "O piloto está no Brasil."
         val prompt = """
             Encontre o lugar/estabelecimento que o piloto pediu por voz: "$query".
@@ -96,6 +97,11 @@ class PlaceFinder(ctx: Context) {
             )
             if (!r.ok) {
                 Http.report("busca-web", "$model -> ${r.code} ${r.reason()} ${r.text.take(200)}")
+                if (r.code == 429) {
+                    // a busca do Google no Gemini grátis está sem cota: não perde tempo tentando de novo por 6 h
+                    webBlockedUntil = System.currentTimeMillis() + 6 * 3_600_000L
+                    return@withContext null
+                }
                 continue
             }
             text = runCatching {
