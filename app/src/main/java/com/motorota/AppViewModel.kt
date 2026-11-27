@@ -910,15 +910,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         alongAlerts = emptyList()
         refreshAlertsAsync(r)
 
-        tripDistM = 0.0
-        tripMaxKmh = 0
-        tripMovingS = 0.0
-        tripStartElapsedMs = SystemClock.elapsedRealtime()
-        tripStartedAt = System.currentTimeMillis()
-        tripStartUsedL = bike?.usedL ?: 0.0
-        tripFrom = origin?.name?.takeIf { it != "Início" } ?: "Minha localização"
-        tripTrack.clear()
-        myLocation?.let { tripTrack.add(it) }
+        // Já estava navegando (pediu parada nova, trocou o destino pelo Jarvis, editou a rota):
+        // é a MESMA viagem, então não zera distância, tempo, velocidade nem o traçado.
+        val continuing = navigating
+        if (!continuing) {
+            tripDistM = 0.0
+            tripMaxKmh = 0
+            tripMovingS = 0.0
+            tripStartElapsedMs = SystemClock.elapsedRealtime()
+            tripStartedAt = System.currentTimeMillis()
+            tripStartUsedL = bike?.usedL ?: 0.0
+            tripFrom = origin?.name?.takeIf { it != "Início" } ?: "Minha localização"
+            tripTrack.clear()
+            myLocation?.let { tripTrack.add(it) }
+        }
         gpsLost = false
         following = true
         navigating = true
@@ -930,8 +935,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             "Rota ${r.mode.label}",
             "Faltam ${formatDistance(r.distanceM.toDouble())} (${formatDuration(r.timeS)})",
         )
-        say("Vamos lá. Rota ${r.mode.label.lowercase()}.", urgent = true)
-        copilotBriefing(r)
+        if (continuing) {
+            say("Rota atualizada.", urgent = true)
+        } else {
+            say("Vamos lá. Rota ${r.mode.label.lowercase()}.", urgent = true)
+            copilotBriefing(r)
+        }
         startLiveWatch()
     }
 
