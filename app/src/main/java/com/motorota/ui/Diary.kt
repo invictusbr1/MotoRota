@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.motorota.AppViewModel
 import com.motorota.data.RiddenTrip
+import com.motorota.routing.formatDistance
+import com.motorota.routing.formatDuration
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
