@@ -38,6 +38,9 @@ data class Friend(val id: String, val name: String)
 /** Grupo de pilotos (família, turma da trilha...). Vai junto com cada recado, então todos do grupo o recebem. */
 data class Group(val id: String, val name: String, val members: List<Friend>)
 
+/** Moto de um amigo no comboio (posição ao vivo). */
+data class ConvoyPeer(val id: String, val name: String, val lat: Double, val lon: Double, val kmh: Int, val bearing: Float, val at: Long)
+
 /** Recado de voz/texto entre pilotos: fica guardado na central até o outro celular pegar. */
 data class Recado(val fromId: String, val fromName: String, val text: String, val group: String?, val time: Long, val notice: Boolean = false)
 
@@ -467,6 +470,137 @@ class Intercom(
         return "Chamando ${f.name}."
     }
 
+    // ---------- Comboio: posição ao vivo das motos do grupo ----------
+
+    var convoy by mutableStateOf<Group?>(null); private set
+    var convoyPeers by mutableStateOf<Map<String, ConvoyPeer>>(emptyMap()); private set
+    private var convoyJob: Job? = null
+    private var lastPosSent = 0L
+    private var myLastPos: Pair<Double, Double>? = null
+    private val farAlerted = HashMap<String, Long>()
+
+    private fun convoyChannel(gid: String) = "comboio:$gid"
+
+    /** Liga o comboio do grupo: minha posição vai para o grupo e eu vejo a de quem também ligou. */
+    fun startConvoy(g: Group, invite: Boolean = true): String {
+        if (myName.isBlank()) return "Antes, coloque seu nome em Ajustes, Intercomunicador."
+        convoy?.let { if (it.id != g.id) stopConvoy(silent = true) }
+        convoy = g
+        convoyPeers = emptyMap()
+        rt.join(convoyChannel(g.id))
+        lastPosSent = 0L
+        convoyJob?.cancel()
+        convoyJob = scope.launch {
+            // limpa quem sumiu e desliga sozinho depois de 10 h
+            val started = SystemClock.elapsedRealtime()
+            while (convoy?.id == g.id) {
+                delay(15_000)
+                val now = System.currentTimeMillis()
+                convoyPeers = convoyPeers.filterValues { now - it.at < 10 * 60_000 }
+                if (SystemClock.elapsedRealtime() - started > 10 * 3_600_000L) { stopConvoy(); break }
+            }
+        }
+        if (invite) {
+            val members = JSONArray().apply {
+                put(JSONObject().put("id", myId).put("nome", myName))
+                g.members.forEach { put(JSONObject().put("id", it.id).put("nome", it.name)) }
+            }
+            for (m in g.members) {
+                if (m.id == myId) continue
+                val ch = myChannel(m.id)
+                rt.join(ch)
+                scope.launch {
+                    delay(500)
+                    val p = JSONObject().put("to", m.id).put("from", myId).put("nome", myName)
+                        .put("grupo", JSONObject().put("id", g.id).put("nome", g.name).put("membros", members))
+                    if (!rt.broadcast(ch, "comboio", p)) { delay(700); rt.broadcast(ch, "comboio", p) }
+                    delay(3000)
+                    if (m.id != peerId) rt.leave(ch)
+                }
+            }
+        }
+        return "Comboio do grupo ${g.name} ligado. Quem aceitar aparece no seu mapa."
+    }
+
+    fun stopConvoy(silent: Boolean = false): String {
+        val g = convoy ?: return "O comboio já está desligado."
+        rt.broadcast(convoyChannel(g.id), "sair", JSONObject().put("f", myId))
+        convoy = null
+        convoyPeers = emptyMap()
+        convoyJob?.cancel()
+        scope.launch { delay(800); rt.leave(convoyChannel(g.id)) }
+        if (!silent) notify("Comboio desligado: sua posição parou de ser enviada.")
+        return "Comboio desligado."
+    }
+
+    /** O app chama a cada posição do GPS; manda para o grupo no máximo a cada 4 s. */
+    fun publishPosition(lat: Double, lon: Double, kmh: Int, bearing: Float) {
+        myLastPos = lat to lon
+        val g = convoy ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPosSent < 4_000) return
+        lastPosSent = now
+        rt.broadcast(
+            convoyChannel(g.id), "pos",
+            JSONObject().put("f", myId).put("nome", myName).put("lat", lat).put("lon", lon).put("v", kmh).put("b", bearing.toDouble()),
+        )
+    }
+
+    private fun onConvoyInvite(from: String, name: String, g: JSONObject) {
+        adoptGroup(g)
+        val gid = g.optString("id")
+        val grp = groups.firstOrNull { it.id == gid } ?: return
+        if (convoy?.id == gid) return
+        scope.launch {
+            val who = friends.firstOrNull { it.id == from }?.name ?: name.ifBlank { "Um piloto" }
+            val yes = askYesNo("${myName.ifBlank { "Piloto" }}, o $who ligou o comboio do grupo ${grp.name}. Compartilho sua localização com o grupo?")
+            if (yes == true) notify(startConvoy(grp, invite = false))
+        }
+    }
+
+    private fun onConvoyPos(p: JSONObject) {
+        val f = p.optString("f")
+        if (f.isBlank() || f == myId) return
+        val name = friends.firstOrNull { it.id == f }?.name ?: p.optString("nome")
+        val peer = ConvoyPeer(f, name, p.optDouble("lat"), p.optDouble("lon"), p.optInt("v"), p.optDouble("b").toFloat(), System.currentTimeMillis())
+        val isNew = f !in convoyPeers
+        convoyPeers = convoyPeers + (f to peer)
+        if (isNew) notify("🏍️ $name entrou no comboio.")
+        // alguém ficou muito longe (errou o caminho ou ficou para trás): avisa uma vez a cada 10 min
+        val me = myLastPos ?: return
+        val d = distM(me.first, me.second, peer.lat, peer.lon)
+        val last = farAlerted[f] ?: 0L
+        if (d > 3_000 && System.currentTimeMillis() - last > 10 * 60_000) {
+            farAlerted[f] = System.currentTimeMillis()
+            val km = String.format(java.util.Locale("pt", "BR"), "%.1f", d / 1000)
+            notify("⚠️ $name está a $km km de você.")
+            scope.launch { speak("Atenção: o $name está a $km quilômetros de você no comboio.") }
+        } else if (d < 1_500) {
+            farAlerted.remove(f)
+        }
+    }
+
+    private fun distM(a1: Double, o1: Double, a2: Double, o2: Double): Double {
+        val dLat = Math.toRadians(a2 - a1); val dLon = Math.toRadians(o2 - o1)
+        val h = Math.sin(dLat / 2).let { it * it } + Math.cos(Math.toRadians(a1)) * Math.cos(Math.toRadians(a2)) * Math.sin(dLon / 2).let { it * it }
+        return 2 * 6_371_000 * Math.asin(Math.sqrt(h))
+    }
+
+    /** "onde está o Renato?": distância e direção a partir de mim */
+    fun whereIs(spoken: String): String {
+        val f = findFriend(spoken)
+        val p = convoyPeers.values.firstOrNull { it.id == f?.id } ?: convoyPeers.values.firstOrNull { norm(it.name).contains(norm(spoken)) }
+            ?: return if (convoy == null) "O comboio não está ligado." else "Não estou recebendo a posição de \"$spoken\" no comboio."
+        val me = myLastPos ?: return "${p.name} está no comboio, mas estou sem o meu GPS."
+        val d = distM(me.first, me.second, p.lat, p.lon)
+        val ageS = (System.currentTimeMillis() - p.at) / 1000
+        return String.format(
+            java.util.Locale("pt", "BR"), "%s está a %s de você, a %d km/h%s.",
+            p.name, if (d < 1000) "${d.toInt()} metros" else String.format(java.util.Locale("pt", "BR"), "%.1f km", d / 1000), p.kmh,
+            if (ageS > 60) " (posição de ${ageS / 60} min atrás)" else "",
+        )
+    }
+
     // ---------- Chamada em grupo ----------
 
     /**
@@ -608,6 +742,19 @@ class Intercom(
     // ---------- Mensagens da central ----------
 
     private fun onRealtime(channel: String, event: String, p: JSONObject) {
+        if (channel.startsWith("comboio:")) {
+            if (channel == convoy?.let { convoyChannel(it.id) }) {
+                when (event) {
+                    "pos" -> onConvoyPos(p)
+                    "sair" -> {
+                        val f = p.optString("f")
+                        convoyPeers[f]?.let { notify("${it.name} saiu do comboio.") }
+                        convoyPeers = convoyPeers - f
+                    }
+                }
+            }
+            return
+        }
         if (channel.startsWith("chamada:")) {
             val f = p.optString("f")
             if (channel == callChannel() && f != myId && groupName != null) {
@@ -639,6 +786,7 @@ class Intercom(
         val call = p.optString("call")
         when (event) {
             "gring" -> p.optJSONObject("grupo")?.let { onGroupRing(from, p.optString("nome"), call, it) }
+            "comboio" -> p.optJSONObject("grupo")?.let { onConvoyInvite(from, p.optString("nome"), it) }
             "ring" -> onRing(from, p.optString("nome"), call)
             "ringing" -> if (call == callId) acked = true
             "accept" -> if (call == callId && state == CallState.CALLING) startAudio()

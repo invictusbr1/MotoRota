@@ -601,6 +601,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        if (intercomDelegate.isInitialized()) intercom.publishPosition(p.lat, p.lon, (loc.speed * 3.6f).toInt(), bearing)
         lastLocation = Location(loc).apply { if (speed < 1.5f || !hasBearing()) bearing = this@AppViewModel.bearing }
         myLocation = p
         if (loc.speed > 90f) loc.speed = 0f
@@ -1823,6 +1824,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         },
+        Tool(
+            "comboio",
+            "Liga ou desliga o comboio de um grupo do intercomunicador: as motos do grupo aparecem no mapa ao vivo " +
+                "e o app avisa se alguém ficar longe (errou o caminho ou ficou para trás).",
+            mapOf(
+                "acao" to ("STRING" to "ligar ou desligar"),
+                "grupo" to ("STRING" to "nome do grupo (para ligar)"),
+            ),
+            listOf("acao"),
+        ) { a ->
+            withContext(Dispatchers.Main) {
+                val ic = intercom
+                if (norm(a.optString("acao")).startsWith("deslig") || norm(a.optString("acao")).startsWith("par")) return@withContext ic.stopConvoy()
+                val g = ic.findGroup(a.optString("grupo")) ?: ic.groups.singleOrNull()
+                    ?: return@withContext "Qual grupo? Grupos: ${ic.groups.joinToString(", ") { it.name }.ifBlank { "nenhum (crie no menu Intercomunicador)" }}."
+                ic.startConvoy(g)
+            }
+        },
+        Tool(
+            "onde_esta",
+            "Onde está um amigo do comboio agora: distância até você e velocidade.",
+            mapOf("nome" to ("STRING" to "nome do amigo")),
+            listOf("nome"),
+        ) { a -> withContext(Dispatchers.Main) { intercom.whereIs(a.optString("nome")) } },
         Tool(
             "custo_viagem",
             "Quanto a viagem da rota atual vai gastar de combustível (litros e reais, pelo consumo da moto e o preço médio " +

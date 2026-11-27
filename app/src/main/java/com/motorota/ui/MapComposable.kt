@@ -169,6 +169,11 @@ fun MapLibreMapView(
             MapLayers.setSatellite(it, vm.satellite)
         }
     }
+    // Motos do comboio
+    LaunchedEffect(style, vm.intercom.convoyPeers) {
+        style?.let { MapLayers.updateConvoy(it, vm.intercom.convoyPeers.values) }
+    }
+
     // Traçado de uma viagem do Diário
     LaunchedEffect(style, vm.shownTrack) {
         val s = style ?: return@LaunchedEffect

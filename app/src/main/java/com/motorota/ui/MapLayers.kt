@@ -560,6 +560,46 @@ object MapLayers {
         )
     }
 
+    private const val SRC_CONVOY = "mr-comboio"
+
+    /** Motos do comboio: bolinha verde com o nome (cinza se a posição estiver velha). */
+    fun updateConvoy(style: Style, peers: Collection<com.motorota.intercom.ConvoyPeer>) {
+        if (style.getSource(SRC_CONVOY) == null) {
+            style.addSource(GeoJsonSource(SRC_CONVOY))
+            style.addLayer(
+                CircleLayer("mr-comboio-ponto", SRC_CONVOY).withProperties(
+                    PropertyFactory.circleColor(Expression.get("cor")),
+                    PropertyFactory.circleRadius(9f),
+                    PropertyFactory.circleStrokeColor("#FFFFFF"),
+                    PropertyFactory.circleStrokeWidth(2.5f),
+                ),
+            )
+            style.addLayer(
+                SymbolLayer("mr-comboio-nome", SRC_CONVOY).withProperties(
+                    PropertyFactory.textField(Expression.get("nome")),
+                    PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+                    PropertyFactory.textSize(13f),
+                    PropertyFactory.textColor("#FFFFFF"),
+                    PropertyFactory.textHaloColor("#065F46"),
+                    PropertyFactory.textHaloWidth(2f),
+                    PropertyFactory.textAnchor(Property.TEXT_ANCHOR_BOTTOM),
+                    PropertyFactory.textOffset(arrayOf(0f, -1.1f)),
+                    PropertyFactory.textAllowOverlap(true),
+                    PropertyFactory.textIgnorePlacement(true),
+                ),
+            )
+        }
+        val now = System.currentTimeMillis()
+        style.getSourceAs<GeoJsonSource>(SRC_CONVOY)?.setGeoJson(
+            FeatureCollection.fromFeatures(peers.map { p ->
+                Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat)).apply {
+                    addStringProperty("nome", p.name.split(' ').first())
+                    addStringProperty("cor", if (now - p.at < 45_000) "#10B981" else "#6B7280")
+                }
+            }),
+        )
+    }
+
     private const val SRC_TRACK = "mr-trilha"
 
     /** Traçado de uma viagem do Diário (linha laranja). null = esconde. */

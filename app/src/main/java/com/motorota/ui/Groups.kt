@@ -61,6 +61,13 @@ fun GroupsCard(vm: AppViewModel) {
                 fontSize = 12.5.sp,
                 lineHeight = 17.sp,
             )
+            ic.convoy?.let { cg ->
+                Text(
+                    "📍 Comboio ${cg.name} ligado · ${ic.convoyPeers.size} moto(s) aparecendo no mapa. " +
+                        "Sua posição vai para o grupo a cada 4 segundos.",
+                    color = Color(0xFFFBBF24), fontSize = 12.5.sp,
+                )
+            }
             if (ic.requests.isNotEmpty()) {
                 Text("Pedidos de amizade", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
                 ic.requests.forEach { r ->
@@ -79,7 +86,12 @@ fun GroupsCard(vm: AppViewModel) {
                         Text(g.members.joinToString(", ") { it.name }, color = TextDim, fontSize = 12.5.sp)
                     }
                     androidx.compose.material3.TextButton(onClick = { vm.message = ic.callGroup(g) }, enabled = !ic.busy) {
-                        Text("📞 Conversa", color = Color(0xFF34D399))
+                        Text("📞", color = Color(0xFF34D399))
+                    }
+                    androidx.compose.material3.TextButton(onClick = {
+                        vm.message = if (ic.convoy?.id == g.id) ic.stopConvoy() else ic.startConvoy(g)
+                    }) {
+                        Text(if (ic.convoy?.id == g.id) "📍 Parar" else "📍 Comboio", color = Color(0xFFFBBF24))
                     }
                     IconButton(onClick = { ic.deleteGroup(g.id) }) {
                         Icon(Icons.Rounded.DeleteOutline, "Apagar grupo ${g.name}", tint = TextDim)
