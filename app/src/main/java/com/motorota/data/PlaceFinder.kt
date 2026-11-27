@@ -70,6 +70,49 @@ class PlaceFinder(ctx: Context) {
     }
 
     /**
+     * Google Places (a mesma base do Google Maps): acha comércio, concessionária, empresa antiga,
+     * e entende nome com erro de voz. Só é chamado quando o mapa não acha; o resultado fica guardado.
+     */
+    suspend fun googlePlaces(query: String, near: GeoPoint?): Place? = withContext(Dispatchers.IO) {
+        val key = Keys.google
+        if (key.isBlank()) return@withContext null
+        val body = JSONObject().put("textQuery", query).put("languageCode", "pt-BR").put("regionCode", "BR").put("pageSize", 5)
+        if (near != null) body.put(
+            "locationBias",
+            JSONObject().put(
+                "circle",
+                JSONObject().put("center", JSONObject().put("latitude", near.lat).put("longitude", near.lon)).put("radius", 50_000.0),
+            ),
+        )
+        val r = Http.request(
+            "https://places.googleapis.com/v1/places:searchText", "POST",
+            mapOf(
+                "X-Goog-Api-Key" to key,
+                "X-Goog-FieldMask" to "places.displayName,places.formattedAddress,places.location,places.businessStatus",
+            ),
+            body.toString(), readTimeoutMs = 12_000,
+        )
+        if (!r.ok) {
+            Http.report("busca-google", "\"$query\" -> HTTP ${r.code} ${r.reason()} ${r.text.take(250)}")
+            return@withContext null
+        }
+        val arr = runCatching { JSONObject(r.text).optJSONArray("places") }.getOrNull()
+        if (arr == null || arr.length() == 0) {
+            Http.report("busca-google", "\"$query\" -> nada")
+            return@withContext null
+        }
+        val list = (0 until arr.length()).map { arr.getJSONObject(it) }
+            .filter { it.optString("businessStatus") != "CLOSED_PERMANENTLY" }
+        val o = list.firstOrNull() ?: return@withContext null
+        val loc = o.optJSONObject("location") ?: return@withContext null
+        val name = o.optJSONObject("displayName")?.optString("text").orEmpty().ifBlank { query }
+        val addr = o.optString("formattedAddress")
+        val p = Place(name, addr, GeoPoint(loc.getDouble("latitude"), loc.getDouble("longitude")))
+        Http.report("busca-google", "\"$query\" -> $name | $addr")
+        p
+    }
+
+    /**
      * Pesquisa na web (Google, pelo Gemini) quando o mapa não conhece o lugar.
      * Devolve o lugar já com o ponto no mapa, ou null.
      */

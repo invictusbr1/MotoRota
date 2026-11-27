@@ -25,6 +25,10 @@ object Keys {
     val groq: String
         get() = prefs?.getString("groq", null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.GROQ_KEY
 
+    /** Google Places: acha qualquer comércio/empresa que o mapa não conhece (cota grátis mensal) */
+    val google: String
+        get() = prefs?.getString("google", null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.GOOGLE_KEY
+
     val groqBuiltIn: Boolean get() = BuildConfig.GROQ_KEY.isNotBlank()
 
     fun groqSaved(): String = prefs?.getString("groq", null).orEmpty()

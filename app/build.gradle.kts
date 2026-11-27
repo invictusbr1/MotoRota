@@ -32,10 +32,12 @@ android {
         val tomtomKey = chave("TOMTOM_KEY", localProps.getProperty("tomtom.key"))
         val geminiKey = chave("GEMINI_KEY")
         val groqKey = chave("GROQ_KEY")
+        val googleKey = chave("GOOGLE_KEY")
         val githubRepo = System.getenv("GITHUB_REPOSITORY")?.takeIf { it.isNotBlank() } ?: "invictusbr1/MotoRota"
         buildConfigField("String", "TOMTOM_KEY", "\"" + tomtomKey + "\"")
         buildConfigField("String", "GEMINI_KEY", "\"" + geminiKey + "\"")
         buildConfigField("String", "GROQ_KEY", "\"" + groqKey + "\"")
+        buildConfigField("String", "GOOGLE_KEY", "\"" + googleKey + "\"")
         buildConfigField("String", "GITHUB_REPO", "\"" + githubRepo + "\"")
         ndk { abiFilters += ((project.findProperty("abis") as String?) ?: "arm64-v8a,armeabi-v7a").split(",") }
     }

@@ -1878,7 +1878,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 Http.report("jarvis-destino", "pediu \"$dest\" -> " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
             } else {
                 // 3) o mapa não conhece: pesquisa no Google (comércio, empresa antiga, nome com erro de voz)
-                pl = runCatching { placeFinder.webSearch(dest, here) }.getOrNull()
+                pl = runCatching { placeFinder.googlePlaces(dest, here) }.getOrNull()
+                    ?: runCatching { placeFinder.webSearch(dest, here) }.getOrNull()
                 if (pl == null) {
                     Http.report("jarvis-destino", "pediu \"$dest\" -> nada (mapa nem Google)")
                     return if (found.isEmpty()) "Não encontrei \"$dest\" no mapa nem na busca do Google. Peça o endereço ou o bairro."

@@ -38,6 +38,7 @@ jobs:
           TOMTOM_KEY: ${{ secrets.TOMTOM_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           GROQ_KEY: ${{ secrets.GROQ_KEY }}
+          GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
