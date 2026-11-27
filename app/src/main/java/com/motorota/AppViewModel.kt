@@ -251,7 +251,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (_: Throwable) {
                 }
                 try {
-                    tt.refine(pts, base, known(), zones())?.let { return it }
+                    if (base.source != "TomTom") tt.refine(pts, base, known(), zones())?.let { return it }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Throwable) {
