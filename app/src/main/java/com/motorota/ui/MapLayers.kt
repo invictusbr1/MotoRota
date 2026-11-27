@@ -560,6 +560,29 @@ object MapLayers {
         )
     }
 
+    private const val SRC_TRACK = "mr-trilha"
+
+    /** Traçado de uma viagem do Diário (linha laranja). null = esconde. */
+    fun updateTrack(style: Style, track: List<GeoPoint>?) {
+        if (style.getSource(SRC_TRACK) == null) {
+            style.addSource(GeoJsonSource(SRC_TRACK))
+            val layer = LineLayer("mr-trilha-linha", SRC_TRACK).withProperties(
+                PropertyFactory.lineColor("#F97316"),
+                PropertyFactory.lineWidth(5f),
+                PropertyFactory.lineOpacity(0.9f),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            )
+            if (style.getLayer("mr-route-alt") != null) style.addLayerBelow(layer, "mr-route-alt") else style.addLayer(layer)
+        }
+        val src = style.getSourceAs<GeoJsonSource>(SRC_TRACK) ?: return
+        if (track == null || track.size < 2) {
+            src.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
+            return
+        }
+        src.setGeoJson(Feature.fromGeometry(LineString.fromLngLats(track.map { Point.fromLngLat(it.lon, it.lat) })))
+    }
+
     fun updatePois(style: Style, pois: List<com.motorota.data.Pois.Poi>) {
         addPoiLayers(style)
         val src = style.getSourceAs<GeoJsonSource>(SRC_POIS) ?: return

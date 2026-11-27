@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Headset
@@ -81,6 +82,11 @@ fun MenuScreen(
             "moto", "Minha moto",
             vm.bike?.let { "${it.name} · ~${it.leftKm} km de autonomia" } ?: "Escolha sua moto: consumo e autonomia automáticos",
             Icons.Rounded.TwoWheeler, Color(0xFF60A5FA),
+        ),
+        MenuPage(
+            "diario", "Diário de viagens",
+            if (vm.ridden.isEmpty()) "Suas viagens ficam salvas aqui" else "${vm.ridden.size} viagem(ns) salvas",
+            Icons.Rounded.Route, Color(0xFFFBBF24),
         ),
         MenuPage("jarvis", "Jarvis", "Escuta, voz, chaves e teste de conexão", Icons.Rounded.Mic, Color(0xFF22D3EE)),
         MenuPage("apps", "Aplicativos e mensagens", "WhatsApp, ligações, música e permissões", Icons.Rounded.Apps, Color(0xFFA78BFA)),
@@ -153,6 +159,7 @@ fun MenuScreen(
                             SettingsCards(vm, withMic, "moto")
                         }
                     }
+                    "diario" -> DiarySection(vm) { onClose() }
                     "jarvis" -> {
                         ToggleRow(
                             "Mostrar o texto da conversa",

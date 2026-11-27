@@ -216,6 +216,26 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
                 .zIndex(11f),
         )
 
+        if (vm.shownTrack != null) {
+            Surface(
+                color = Color(0xF21E293B),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 140.dp)
+                    .border(1.dp, Color(0xFFF97316), RoundedCornerShape(50))
+                    .clickable { vm.hideTrack() }
+                    .zIndex(9f),
+            ) {
+                Text(
+                    "Caminho da viagem do diário  ✕",
+                    color = Color.White, fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+            }
+        }
+
         // Toast flutuante discreto no topo/centro (não bloqueia o botão INICIAR)
         val msg = vm.message
         AnimatedVisibility(
@@ -290,7 +310,7 @@ fun MainScreen(vm: AppViewModel, hasLocationPermission: Boolean) {
             },
         )
     }
-    vm.tripSummary?.let { TripSummaryDialog(it, onDismiss = { vm.tripSummary = null }) }
+    vm.tripSummary?.let { TripSummaryDialog(vm, it, onDismiss = { vm.tripSummary = null }) }
     if (showSaveTrip) SaveTripDialog(vm, onDismiss = { showSaveTrip = false })
     if (showDownloads) DownloadDialog(vm, onDismiss = { showDownloads = false })
     if (vm.showWelcome) WelcomeScreen(vm)

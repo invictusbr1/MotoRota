@@ -128,6 +128,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var hazards by mutableStateOf(hazardStore.load()); private set
     var trips by mutableStateOf(tripStore.load()); private set
 
+    // ---------- Diário de viagens (o que foi rodado) ----------
+    private val tripLog = com.motorota.data.TripLog(app)
+    var ridden by mutableStateOf(tripLog.load()); private set
+    /** traçado de uma viagem do diário mostrado no mapa */
+    var shownTrack by mutableStateOf<List<GeoPoint>?>(null); private set
+    private val tripTrack = ArrayList<GeoPoint>()
+    private var tripStartedAt = 0L
+    private var tripStartUsedL = 0.0
+    private var tripFrom = ""
+
+    fun renameRidden(id: Long, name: String, note: String) {
+        val t = ridden.firstOrNull { it.id == id } ?: return
+        ridden = tripLog.update(t.copy(name = name.trim().ifBlank { t.name }.take(60), note = note.trim().take(300)), ridden)
+    }
+
+    fun deleteRidden(id: Long) {
+        ridden = tripLog.delete(id, ridden)
+        if (shownTrack != null) shownTrack = null
+    }
+
+    fun showRidden(id: Long) {
+        shownTrack = tripLog.track(id).takeIf { it.size > 1 }
+        if (shownTrack == null) message = "Essa viagem não tem traçado salvo."
+    }
+
+    fun hideTrack() { shownTrack = null }
+
     // ---------- Preferências Visuais e Áudio ----------
     var night by mutableStateOf(LocalTime.now().hour.let { it >= 18 || it < 6 })
 
@@ -567,6 +594,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (navigating) {
                 tripDistM += moved
                 tripMovingS += dt
+                // traçado do diário: um ponto a cada ~40 m
+                if (tripTrack.isEmpty() || tripTrack.last().distanceTo(p) > 40) {
+                    if (tripTrack.size < 20_000) tripTrack.add(p)
+                }
             }
         }
 
@@ -882,6 +913,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tripMaxKmh = 0
         tripMovingS = 0.0
         tripStartElapsedMs = SystemClock.elapsedRealtime()
+        tripStartedAt = System.currentTimeMillis()
+        tripStartUsedL = bike?.usedL ?: 0.0
+        tripFrom = origin?.name?.takeIf { it != "Início" } ?: "Minha localização"
+        tripTrack.clear()
+        myLocation?.let { tripTrack.add(it) }
         gpsLost = false
         following = true
         navigating = true
@@ -918,9 +954,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun saveRiddenTrip(arrived: Boolean) {
+        val b = bike
+        val liters = if (b != null) (b.usedL - tripStartUsedL).coerceAtLeast(0.0) else 0.0
+        val mid = tripTrack.getOrNull(tripTrack.size / 2)
+        val price = if (fuelPriceManual > 0) fuelPriceManual else mid?.let { com.motorota.data.FuelPrices.priceAt(it, fuelType) } ?: 0.0
+        val to = destination?.name ?: "Destino"
+        val date = java.text.SimpleDateFormat("dd/MM", java.util.Locale("pt", "BR")).format(java.util.Date(tripStartedAt))
+        val t = com.motorota.data.RiddenTrip(
+            id = System.currentTimeMillis(),
+            name = "$tripFrom → $to ($date)",
+            startedAt = tripStartedAt, endedAt = System.currentTimeMillis(),
+            from = tripFrom, to = to,
+            distM = tripDistM, timeS = tripElapsedS, movingS = tripMovingS.toLong(),
+            avgKmh = tripAvgKmh, maxKmh = tripMaxKmh,
+            liters = liters, cost = liters * price, arrived = arrived,
+            bike = b?.name.orEmpty(), note = "",
+            track = tripTrack.toList(),
+        )
+        runCatching { ridden = tripLog.add(t, ridden) }
+        lastRiddenId = t.id
+    }
+
+    /** id da última viagem salva (o resumo da chegada permite dar nome a ela) */
+    var lastRiddenId: Long? = null; private set
+
     fun stopNavigation(arrived: Boolean = false) {
         liveWatchJob?.cancel()
         if (navigating && tripDistM > 300) {
+            saveRiddenTrip(arrived)
             tripSummary = TripSummary(
                 distM = tripDistM,
                 timeS = tripElapsedS,

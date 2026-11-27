@@ -484,7 +484,9 @@ fun StopActionDialog(vm: AppViewModel, i: Int, onDismiss: () -> Unit) {
 
 /** Resumo exibido ao concluir ou encerrar uma viagem. */
 @Composable
-fun TripSummaryDialog(s: AppViewModel.TripSummary, onDismiss: () -> Unit) {
+fun TripSummaryDialog(vm: AppViewModel, s: AppViewModel.TripSummary, onDismiss: () -> Unit) {
+    val saved = vm.lastRiddenId?.let { id -> vm.ridden.firstOrNull { it.id == id } }
+    var name by remember(saved?.id) { mutableStateOf(saved?.name.orEmpty()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DialogBg,
@@ -507,10 +509,31 @@ fun TripSummaryDialog(s: AppViewModel.TripSummary, onDismiss: () -> Unit) {
                     SummaryMetricRow(Icons.Rounded.SportsMotorsports, "Em movimento", formatDuration(s.movingS.toInt()))
                     SummaryMetricRow(Icons.Rounded.Speed, "Velocidade média", "${s.avgKmh} km/h")
                     SummaryMetricRow(Icons.AutoMirrored.Rounded.TrendingUp, "Velocidade máxima", "${s.maxKmh} km/h")
+                    if (saved != null && saved.liters > 0) {
+                        SummaryMetricRow(
+                            Icons.Rounded.LocalGasStation, "Combustível",
+                            String.format(java.util.Locale("pt", "BR"), "%.1f L", saved.liters) +
+                                if (saved.cost > 0) String.format(java.util.Locale("pt", "BR"), " · R$ %.0f", saved.cost) else "",
+                        )
+                    }
+                    if (saved != null) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it.take(60) },
+                            label = { Text("Nome da viagem (fica no Diário de viagens)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         },
-        confirmButton = { Button(onClick = onDismiss) { Text("OK") } },
+        confirmButton = {
+            Button(onClick = {
+                saved?.let { if (name != it.name) vm.renameRidden(it.id, name, it.note) }
+                onDismiss()
+            }) { Text(if (saved != null) "Salvar" else "OK") }
+        },
     )
 }
 

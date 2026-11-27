@@ -169,6 +169,20 @@ fun MapLibreMapView(
             MapLayers.setSatellite(it, vm.satellite)
         }
     }
+    // Traçado de uma viagem do Diário
+    LaunchedEffect(style, vm.shownTrack) {
+        val s = style ?: return@LaunchedEffect
+        val m = map ?: return@LaunchedEffect
+        val t = vm.shownTrack
+        MapLayers.updateTrack(s, t)
+        if (t != null && t.size > 1 && !vm.navigating) {
+            val b = LatLngBounds.Builder()
+            t.forEach { b.include(LatLng(it.lat, it.lon)) }
+            val pad = with(density) { 60.dp.toPx().toInt() }
+            m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 0.0, 0.0, pad, pad * 2, pad, pad * 3), 800)
+        }
+    }
+
     LaunchedEffect(style, vm.pois) {
         style?.let { MapLayers.updatePois(it, vm.pois) }
     }
