@@ -403,7 +403,8 @@ fun NavigationHud(
                             vm.fuelLeftKm?.let { left ->
                                 CockpitChip(
                                     Icons.Rounded.LocalGasStation,
-                                    "${left.coerceAtLeast(0)} km",
+                                    vm.bike?.let { b -> String.format(java.util.Locale("pt", "BR"), "%.1f L · ", b.leftL.coerceAtLeast(0.0)) }.orEmpty() +
+                                        "${left.coerceAtLeast(0)} km",
                                     highlight = if (left <= 60) Color(0xFF92400E) else null,
                                 )
                             }

@@ -472,6 +472,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) { knownRisksVersion++ }
             radarStore.load()
             withContext(Dispatchers.Main) { radarsVersion++ }
+            // preço da gasolina da semana (ANP)
+            runCatching { com.motorota.data.FuelPrices.init(app); com.motorota.data.FuelPrices.refresh() }
             // lista de radares da semana + os que a turma marcou
             if (runCatching { radarStore.refreshOnline() }.getOrDefault(false)) {
                 radarStore.load()
@@ -1345,6 +1347,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // desligado por padrão: o Jarvis só fala das mensagens quando o piloto pergunta
     var readMessagesAloud by mutableStateOf(prefs.getBoolean("avisar_mensagens", false)); private set
 
+    /** combustível para o custo da viagem: "comum" ou "aditivada"; preço manual (0 = média da ANP) */
+    var fuelType by mutableStateOf(prefs.getString("tipo_gasolina", "comum") ?: "comum"); private set
+    var fuelPriceManual by mutableStateOf(prefs.getFloat("preco_gasolina", 0f).toDouble()); private set
+    fun setFuel(type: String, manual: Double) {
+        fuelType = type; fuelPriceManual = manual.coerceIn(0.0, 30.0)
+        prefs.edit().putString("tipo_gasolina", type).putFloat("preco_gasolina", fuelPriceManual.toFloat()).apply()
+    }
+
+    /** Quanto a rota gasta de combustível com a moto escolhida (null sem moto ou sem preço). */
+    fun tripCost(r: RouteResult): com.motorota.data.FuelPrices.TripCost? {
+        val b = bike ?: return null
+        return com.motorota.data.FuelPrices.tripCost(r, b.kmL, fuelType, fuelPriceManual, b.leftKm, b.fullRangeKm)
+    }
+
     /** mostrar o texto da conversa com o Jarvis no mapa (desligado: só um ícone discreto) */
     var jarvisText by mutableStateOf(prefs.getBoolean("jarvis_texto", false)); private set
     fun toggleJarvisText() {
@@ -1743,6 +1759,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     ic.call(f)
                 }
+            }
+        },
+        Tool(
+            "custo_viagem",
+            "Quanto a viagem da rota atual vai gastar de combustível (litros e reais, pelo consumo da moto e o preço médio " +
+                "da gasolina de cada estado pela ANP) e quantas paradas para abastecer.",
+        ) { _ ->
+            withContext(Dispatchers.Main) {
+                val r = currentRoute ?: return@withContext "Não tem rota traçada agora."
+                if (bike == null) return@withContext "A moto ainda não foi escolhida no app (Menu, Minha moto)."
+                val c = tripCost(r) ?: return@withContext "Ainda não tenho o preço da gasolina (precisa de internet uma vez)."
+                String.format(
+                    java.util.Locale("pt", "BR"),
+                    "Viagem de %d km: cerca de %.0f litros, uns R$ %.0f (gasolina %s a R$ %.2f em média%s). %s",
+                    r.distanceM / 1000, c.liters, c.reais, fuelType, c.pricePerL,
+                    if (fuelPriceManual > 0) ", preço que o piloto definiu" else ", ANP semana ${com.motorota.data.FuelPrices.week ?: ""}",
+                    if (c.refuels > 0) "Precisa abastecer ${c.refuels} vez(es) no caminho." else "Dá para ir sem abastecer.",
+                )
             }
         },
         Tool(

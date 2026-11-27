@@ -13,12 +13,8 @@ UF = {
 }
 PROD = {"GASOLINA COMUM": "comum", "GASOLINA ADITIVADA": "aditivada", "ETANOL HIDRATADO": "etanol"}
 
-html = urllib.request.urlopen(urllib.request.Request(PAGE, headers=UA), timeout=60).read().decode("utf-8", "ignore")
-links = re.findall(r'https://[^"]*resumo_semanal_lpc[^"]*\.xlsx', html)
-if not links:
-    sys.exit("nenhuma planilha encontrada")
-url = links[0]
-data = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120).read()
+# o site da ANP derruba conexões do Python às vezes: a página e a planilha vêm baixadas pelo curl (workflow)
+data = open(sys.argv[1], "rb").read()
 ws = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)["ESTADOS"]
 out = {"fonte": "ANP - Levantamento de Preços de Combustíveis (semanal)", "estados": {}, "brasil": {}}
 tot = {}

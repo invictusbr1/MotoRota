@@ -216,6 +216,13 @@ fun RouteSheet(vm: AppViewModel, onSaveTrip: () -> Unit) {
                                 StatusPill(emoji = "🚦", text = ts)
                             }
                             if (r.source == "TomTom") StatusPill(emoji = "🗺️", text = "Mapa atualizado")
+                            vm.tripCost(r)?.let { c ->
+                                StatusPill(
+                                    emoji = "⛽",
+                                    text = String.format(java.util.Locale("pt", "BR"), "~R$ %.0f · %.0f L", c.reais, c.liters) +
+                                        if (c.refuels > 0) " · ${c.refuels} parada(s)" else "",
+                                )
+                            }
                         }
 
                         // Caixa consolidada de avisos importantes (só aparece quando há alertas reais)

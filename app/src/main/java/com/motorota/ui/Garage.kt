@@ -265,6 +265,8 @@ fun GarageSection(vm: AppViewModel) {
             }
         }
 
+        FuelPriceCard(vm)
+
         b.model?.let { m ->
             Surface(
                 color = SurfaceCard,
@@ -334,6 +336,56 @@ fun WelcomeScreen(vm: AppViewModel) {
             ) { Text("Começar", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
             TextButton(onClick = { vm.finishWelcome(name, null) }, modifier = Modifier.fillMaxWidth()) {
                 Text(if (model == null) "Escolho a moto depois" else "Pular", color = TextDim)
+            }
+        }
+    }
+}
+
+
+/** Gasolina usada no cálculo do custo da viagem: comum/aditivada pela média da ANP, ou preço próprio. */
+@Composable
+private fun FuelPriceCard(vm: AppViewModel) {
+    var priceText by remember { mutableStateOf(if (vm.fuelPriceManual > 0) fmt(vm.fuelPriceManual, 2) else "") }
+    Surface(
+        color = SurfaceCard,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, PanelBorder, RoundedCornerShape(14.dp)),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Custo das viagens", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Ao traçar a rota, o app mostra quanto vai gastar de gasolina com o consumo da sua moto e o preço médio " +
+                    "de cada estado do caminho (ANP, atualizado toda semana" +
+                    (com.motorota.data.FuelPrices.week?.let { ": $it" } ?: "") + ").",
+                color = TextDim, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("comum" to "Gasolina comum", "aditivada" to "Aditivada").forEach { (k, l) ->
+                    val sel = vm.fuelType == k
+                    Surface(
+                        color = if (sel) Color(0xFF1D4ED8) else Color(0xFF2D3744),
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1f).clickable { vm.setFuel(k, vm.fuelPriceManual) },
+                    ) {
+                        Text(
+                            l, color = Color.White, fontSize = 13.5.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = priceText,
+                    onValueChange = { t -> priceText = t.filter { it.isDigit() || it == ',' || it == '.' }.take(5) },
+                    label = { Text("Preço próprio R$/L (vazio = média ANP)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { vm.setFuel(vm.fuelType, priceText.replace(',', '.').toDoubleOrNull() ?: 0.0) }) { Text("Salvar") }
             }
         }
     }
