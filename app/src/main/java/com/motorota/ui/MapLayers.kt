@@ -122,8 +122,15 @@ object MapLayers {
         layer.setFilter(Expression.match(Expression.get("class"), Expression.literal(false),
             Expression.stop("motorway", true), Expression.stop("trunk", true), Expression.stop("primary", true)))
         layer.minZoom = 7f
-        val firstOurs = style.layers.firstOrNull { it.id.startsWith("mr-") && it.id != LAYER_SAT }?.id
-        if (firstOurs != null) style.addLayerBelow(layer, firstOurs) else style.addLayer(layer)
+        // por CIMA da linha azul da rota (antes o nome da rodovia ficava escondido embaixo dela),
+        // mas abaixo de radares, alertas e pontos da rota
+        when {
+            style.getLayer("mr-route-arrows") != null -> style.addLayerAbove(layer, "mr-route-arrows")
+            else -> {
+                val firstOurs = style.layers.firstOrNull { it.id.startsWith("mr-") && it.id != LAYER_SAT }?.id
+                if (firstOurs != null) style.addLayerBelow(layer, firstOurs) else style.addLayer(layer)
+            }
+        }
     }
 
     private val HIDE = listOf(

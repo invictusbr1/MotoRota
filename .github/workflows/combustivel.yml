@@ -1,0 +1,23 @@
+name: Preco da gasolina (ANP)
+
+on:
+  schedule:
+    - cron: "0 12 * * 2"   # toda terca (a ANP publica no fim de semana)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install -q openpyxl
+      - run: python3 scripts/atualizar_combustivel.py
+      - name: Salvar
+        run: |
+          git config user.name "invictusbr1"
+          git config user.email "176849483+invictusbr1@users.noreply.github.com"
+          git add dados/combustivel.json
+          git diff --cached --quiet || (git commit -m "Preco medio da gasolina da semana (ANP) [skip ci]" && git push)
