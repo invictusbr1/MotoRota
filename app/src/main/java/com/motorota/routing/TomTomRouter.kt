@@ -151,7 +151,45 @@ object TomTomRouter {
             return@withContext tt.copy(note = base.note)
         }
 
-        // 3) janelas de ~25 km: onde o caminho offline "enrola" (anda bem mais que a distância em linha reta),
+        // 3) mapa online guiado: a TomTom calcula com trânsito ao vivo e mapa do dia, mas passando por pontos
+        //    do caminho seguro a cada ~30 km (mantém as grandes escolhas: Arco em vez da Ponte etc.)
+        run {
+            val guide = ArrayList<GeoPoint>()
+            guide.add(points.first())
+            var nextG = 30_000.0
+            val total = base.cumDist.last()
+            for (i in base.points.indices) {
+                if (base.cumDist[i] >= nextG && total - base.cumDist[i] > 10_000) {
+                    guide.add(base.points[i]); nextG = base.cumDist[i] + 30_000
+                }
+            }
+            guide.add(points.last())
+            if (guide.size > 2 && guide.size <= 60) {
+                val gl = guide.joinToString(":") { String.format(Locale.US, "%.6f,%.6f", it.lat, it.lon) }
+                val gr = Http.request(
+                    "https://api.tomtom.com/routing/1/calculateRoute/$gl/json?key=${Keys.tomtom}" +
+                        "&travelMode=car&routeType=fastest&traffic=true&instructionsType=coded&language=pt-BR" +
+                        "&routeRepresentation=polyline&computeTravelTimeFor=none&sectionType=speedLimit",
+                    readTimeoutMs = 15_000,
+                )
+                if (gr.ok) {
+                    val g = runCatching { parse(base.mode, gr.text) }.getOrNull()
+                    if (g != null) {
+                        val rg = risky(g, known, zones, corridors)
+                        val hit = g.points.any { p -> risks.any { p.distanceTo(it.point) < it.radiusM } }
+                        val ok = !hit && rg <= rBase + margin && g.cumDist.last() <= base.cumDist.last() * 1.10
+                        Http.report(
+                            "rota-desvio",
+                            "${base.mode.label}: online guiado ${g.distanceM / 1000} km risco ${rg.toInt()} m x offline ${base.distanceM / 1000} km risco ${rBase.toInt()} m -> " +
+                                if (ok) "USOU ONLINE" else "ficou offline",
+                        )
+                        if (ok) return@withContext g.copy(note = base.note)
+                    }
+                }
+            }
+        }
+
+        // 4) janelas de ~25 km: onde o caminho offline "enrola" (anda bem mais que a distância em linha reta),
         //    pergunta à TomTom o caminho entre o início e o fim da janela e troca se for bem mais curto e não mais arriscado.
         val n = base.points.size
         val starts = ArrayList<Int>()
