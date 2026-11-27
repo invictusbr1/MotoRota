@@ -95,6 +95,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val downloader = MapDownloader(app, engine.segmentDir)
     private val riskStore = RiskStore(app)
     val radarStore = RadarStore(app)
+    /** lugares achados e guardados (offline) + busca no Google quando o mapa não conhece */
+    val placeFinder = com.motorota.data.PlaceFinder(app)
     private val hazardStore = HazardStore(app)
     private val tripStore = TripStore(app)
     private val prefs = app.getSharedPreferences("preferencias", Context.MODE_PRIVATE)
@@ -1710,6 +1712,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         Tool(
+            "salvar_lugar",
+            "Guarda o lugar onde o piloto está AGORA com um nome (ex.: \"salva aqui como oficina do Zé\"). " +
+                "Depois ele pode pedir rota para esse nome, mesmo sem internet.",
+            mapOf("nome" to ("STRING" to "nome para o lugar")),
+            listOf("nome"),
+        ) { a ->
+            withContext(Dispatchers.Main) {
+                val me = myLocation ?: return@withContext "Estou sem GPS agora."
+                val n = a.optString("nome").trim().ifBlank { return@withContext "Qual nome?" }
+                placeFinder.remember(Place(n, "salvo pelo piloto", me), n)
+                "Guardei aqui como $n."
+            }
+        },
+        Tool(
             "mandar_recado",
             "Manda um recado pelo MotoRota para um amigo ou grupo do intercomunicador (o Jarvis dele fala o recado em voz alta; " +
                 "se faltar internet, guarda e envia quando voltar). Use para amigos/grupos do app; WhatsApp só se o piloto falar WhatsApp " +
@@ -1850,21 +1866,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun jarvisNavigate(dest: String): String {
         if (dest.isBlank()) return "Faltou dizer o destino."
         val here = withContext(Dispatchers.Main) { myLocation }
-        val found = Geocoder.search(dest, here)
-        val p = found.firstOrNull() ?: return "Não encontrei \"$dest\" no mapa."
-        if (!Geocoder.matches(p, dest)) {
-            Http.report("jarvis-destino", "pediu \"$dest\" -> sem nome igual, perguntou: " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
-            return "Não achei exatamente \"$dest\". Os mais parecidos: " +
-                found.take(3).joinToString("; ") { "${it.name} (${it.detail})" } +
-                ". Pergunte ao piloto qual é, ou peça a cidade mais próxima do lugar."
+        // 1) lugar já achado antes (funciona sem internet)
+        var pl: Place? = placeFinder.findSaved(dest)?.let { Place(it.name, it.detail, it.point) }
+        if (pl != null) Http.report("jarvis-destino", "pediu \"$dest\" -> guardado: ${pl.name}")
+        if (pl == null) {
+            // 2) busca do mapa
+            val found = try { Geocoder.search(dest, here) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { emptyList() }
+            val first = found.firstOrNull()
+            if (first != null && Geocoder.matches(first, dest)) {
+                pl = first
+                Http.report("jarvis-destino", "pediu \"$dest\" -> " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
+            } else {
+                // 3) o mapa não conhece: pesquisa no Google (comércio, empresa antiga, nome com erro de voz)
+                pl = runCatching { placeFinder.webSearch(dest, here) }.getOrNull()
+                if (pl == null) {
+                    Http.report("jarvis-destino", "pediu \"$dest\" -> nada (mapa nem Google)")
+                    return if (found.isEmpty()) "Não encontrei \"$dest\" no mapa nem na busca do Google. Peça o endereço ou o bairro."
+                    else "Não achei exatamente \"$dest\". Os mais parecidos: " +
+                        found.take(3).joinToString("; ") { "${it.name} (${it.detail})" } +
+                        ". Pergunte ao piloto qual é, ou peça o endereço."
+                }
+            }
         }
-        Http.report("jarvis-destino", "pediu \"$dest\" -> " + found.take(4).joinToString(" | ") { "${it.name} (${it.detail})" })
+        val place = pl!!
+        placeFinder.remember(place, dest)
+        val p2 = place
         withContext(Dispatchers.Main) {
             stops = emptyList()
             origin = null
             pendingStart = true
-            goTo(Waypoint(p.point, p.name))
+            goTo(Waypoint(p2.point, p2.name))
         }
+        val p = p2
         repeat(150) { // viagem longa pode levar até ~45 s para calcular
             delay(300)
             val done = withContext(Dispatchers.Main) {
