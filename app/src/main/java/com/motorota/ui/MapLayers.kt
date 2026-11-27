@@ -549,7 +549,7 @@ object MapLayers {
                 PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
                 PropertyFactory.textOffset(arrayOf(0f, 0.7f)),
                 PropertyFactory.textOptional(true),
-            ).apply { minZoom = 15f },
+            ).apply { minZoom = 16f },
         )
     }
 

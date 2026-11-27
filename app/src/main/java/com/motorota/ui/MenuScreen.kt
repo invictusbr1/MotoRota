@@ -153,13 +153,27 @@ fun MenuScreen(
                             SettingsCards(vm, withMic, "moto")
                         }
                     }
-                    "jarvis" -> SettingsCards(vm, withMic, "jarvis")
+                    "jarvis" -> {
+                        ToggleRow(
+                            "Mostrar o texto da conversa",
+                            "Desligado: só um ícone pequeno no canto (Ouvindo / Falando), sem tampar o mapa",
+                            vm.jarvisText,
+                        ) { vm.toggleJarvisText() }
+                        SettingsCards(vm, withMic, "jarvis")
+                    }
                     "apps" -> SettingsCards(vm, withMic, "apps")
                     "intercom" -> SettingsCards(vm, withMic, "intercom")
 
                     "mapa" -> {
                         ToggleRow("Tema escuro (noite)", "Liga sozinho à noite", vm.night) { vm.night = !vm.night }
                         ToggleRow("Imagem de satélite", "Fundo com foto aérea", vm.satellite) { vm.toggleSatellite() }
+                        Text(
+                            "Estabelecimentos no mapa (só os mais perto; na rota, só postos)",
+                            color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp),
+                        )
+                        com.motorota.data.Pois.Kind.values().forEach { k ->
+                            ToggleRow(k.label, null, k in vm.poiKinds) { vm.togglePoiKind(k) }
+                        }
                         ActionCard(Icons.Rounded.Download, "Mapas offline", "Baixe o mapa da região para calcular rotas sem internet") {
                             onOpenDownloads()
                         }

@@ -47,6 +47,43 @@ import kotlinx.coroutines.delay
 
 private val JarvisCyan = Color(0xFF22D3EE)
 
+/**
+ * Modo discreto (padrão): só um ícone pequeno no canto mostrando que o Jarvis está ouvindo,
+ * pensando ou falando. Nada de texto no meio do mapa. Toque cancela.
+ */
+@Composable
+private fun JarvisDot(vm: AppViewModel, active: Boolean, modifier: Modifier) {
+    val j = vm.jarvis
+    AnimatedVisibility(visible = active, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        val pulse = rememberInfiniteTransition(label = "jarvis-dot")
+        val a by pulse.animateFloat(
+            initialValue = 0.4f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "pulso",
+        )
+        val word = when (j.status) {
+            JarvisStatus.LISTENING -> "Ouvindo"
+            JarvisStatus.THINKING -> "Pensando"
+            JarvisStatus.SPEAKING -> "Falando"
+            else -> "Jarvis"
+        }
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
+            Surface(
+                color = Color(0xE60B1220),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .border(1.dp, JarvisCyan.copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .clickable { j.cancel() },
+            ) {
+                Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Mic, null, tint = JarvisCyan, modifier = Modifier.size(18.dp).alpha(a))
+                    Spacer(Modifier.width(6.dp))
+                    Text(word, color = JarvisCyan, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
 /** Balão do Jarvis: mostra "ouvindo", o que foi entendido e a resposta. Toque para fechar/cancelar. */
 @Composable
 fun JarvisBubble(vm: AppViewModel, modifier: Modifier = Modifier) {
@@ -64,6 +101,10 @@ fun JarvisBubble(vm: AppViewModel, modifier: Modifier = Modifier) {
     }
 
     val active = j.busyNow || st == JarvisStatus.PREPARING
+    if (!vm.jarvisText && st != JarvisStatus.PREPARING) {
+        JarvisDot(vm, active, modifier)
+        return
+    }
     AnimatedVisibility(
         visible = active || (showReply && j.reply.isNotBlank()),
         enter = fadeIn(),

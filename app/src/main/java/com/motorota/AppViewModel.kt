@@ -1295,7 +1295,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------- Estabelecimentos do mapa (TomTom, atualizados) ----------
-    var pois by mutableStateOf<List<com.motorota.data.Pois.Poi>>(emptyList()); private set
+    private var poisAll by mutableStateOf<List<com.motorota.data.Pois.Poi>>(emptyList())
+
+    /** tipos de estabelecimento que aparecem no mapa (padrão: só o que importa para o piloto) */
+    var poiKinds by mutableStateOf(
+        (prefs.getString("tipos_pois", null) ?: "POSTO,FARMACIA,HOSPITAL").split(',')
+            .mapNotNull { runCatching { com.motorota.data.Pois.Kind.valueOf(it) }.getOrNull() }.toSet(),
+    ); private set
+
+    fun togglePoiKind(k: com.motorota.data.Pois.Kind) {
+        poiKinds = if (k in poiKinds) poiKinds - k else poiKinds + k
+        prefs.edit().putString("tipos_pois", poiKinds.joinToString(",") { it.name }).apply()
+    }
+
+    /**
+     * O que vai para o mapa: só os tipos escolhidos, no máximo 25, os mais perto do centro.
+     * Navegando, só postos (para não poluir a tela da pilotagem).
+     */
+    val pois: List<com.motorota.data.Pois.Poi>
+        get() {
+            val kinds = if (navigating) poiKinds.intersect(setOf(com.motorota.data.Pois.Kind.POSTO)) else poiKinds
+            val c = poiCenter
+            return poisAll.filter { it.kind in kinds }
+                .sortedBy { p -> c?.distanceTo(p.point) ?: 0.0 }
+                .take(25)
+        }
     private var poiJob: Job? = null
     private var poiCenter: GeoPoint? = null
 
@@ -1306,8 +1330,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         poiJob = viewModelScope.launch {
             delay(600) // espera o mapa parar de mexer
             val list = runCatching { com.motorota.data.Pois.around(center, radiusM) }.getOrDefault(emptyList())
-            if (list.isNotEmpty() || pois.isEmpty()) {
-                pois = list
+            if (list.isNotEmpty() || poisAll.isEmpty()) {
+                poisAll = list
                 poiCenter = center
             }
         }
@@ -1320,6 +1344,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** ler em voz alta as mensagens que chegam (WhatsApp/Telegram/SMS) */
     // desligado por padrão: o Jarvis só fala das mensagens quando o piloto pergunta
     var readMessagesAloud by mutableStateOf(prefs.getBoolean("avisar_mensagens", false)); private set
+
+    /** mostrar o texto da conversa com o Jarvis no mapa (desligado: só um ícone discreto) */
+    var jarvisText by mutableStateOf(prefs.getBoolean("jarvis_texto", false)); private set
+    fun toggleJarvisText() {
+        jarvisText = !jarvisText
+        prefs.edit().putBoolean("jarvis_texto", jarvisText).apply()
+    }
 
     /** Facilidade de acordar o Jarvis: 0 alta, 1 normal, 2 baixa */
     var wakeSensitivity by mutableStateOf(prefs.getInt("sens_jarvis", 1).also { com.motorota.assistant.WakeWord.sensitivity = it }); private set
